@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -13,6 +13,7 @@ class Resource:
     name: str
     ocid: str
     compartment_id: str
+    compartment_name: str
     region: str
     state: str = ""
-    details: Dict[str, Any] | None = None
+    details: Optional[Dict[str, Any]] = None
