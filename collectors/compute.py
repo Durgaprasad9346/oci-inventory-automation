@@ -6,7 +6,8 @@ from utils.compartments import get_compartments
 
 def collect_compute(config):
     """
-    Collect all OCI Compute instances.
+    Collect all OCI Compute instances
+    from all accessible active compartments.
     """
 
     compute_client = oci.core.ComputeClient(config)
@@ -31,6 +32,7 @@ def collect_compute(config):
                     name=instance.display_name,
                     ocid=instance.id,
                     compartment_id=compartment["id"],
+                    compartment_name=compartment["name"],
                     region=config["region"],
                     state=instance.lifecycle_state,
                 )
