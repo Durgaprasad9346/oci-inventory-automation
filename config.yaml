@@ -1,0 +1,8 @@
+inventory:
+  output_directory: reports
+  include_terminated: false
+
+excel:
+  auto_filter: true
+  freeze_header: true
+  auto_width: true
