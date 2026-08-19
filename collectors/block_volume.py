@@ -8,7 +8,7 @@ from utils.availability_domains import get_availability_domains
 
 def collect_block_volume(config):
     """
-    Collect all OCI Block Volumes from
+    Collect all OCI Block Volumes across
     all subscribed regions, availability domains,
     and accessible compartments.
     """
@@ -35,11 +35,6 @@ def collect_block_volume(config):
         )
 
         for availability_domain in availability_domains:
-
-            print(
-                f"    Availability Domain: "
-                f"{availability_domain}"
-            )
 
             for compartment in compartments:
 
