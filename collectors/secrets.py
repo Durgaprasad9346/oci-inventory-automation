@@ -7,8 +7,10 @@ from utils.regions import get_regions
 
 def collect_secrets(config):
     """
-    Collect all OCI Secrets across all subscribed regions
-    and accessible compartments.
+    Collect all OCI Secrets metadata across all subscribed
+    regions and accessible compartments.
+
+    Secret values are NEVER retrieved.
     """
 
     compartments = get_compartments(config)
@@ -23,27 +25,18 @@ def collect_secrets(config):
         region_config = config.copy()
         region_config["region"] = region
 
-        vaults_client = oci.key_management.KmsVaultClient(
-            region_config
-        )
-
-        secrets_client = oci.secrets.SecretsClient(
+        vault_client = oci.vault.VaultsClient(
             region_config
         )
 
         for compartment in compartments:
 
-            vaults = oci.pagination.list_call_get_all_results(
-                vaults_client.list_vaults,
-                compartment_id=compartment["id"],
-            )
-
-            for vault in vaults.data:
-
-                secrets = oci.pagination.list_call_get_all_results(
-                    secrets_client.list_secrets,
-                    compartment_id=compartment["id"],
-                    vault_id=vault.id,
+            try:
+                secrets = (
+                    oci.pagination.list_call_get_all_results(
+                        vault_client.list_secrets,
+                        compartment_id=compartment["id"],
+                    )
                 )
 
                 for secret in secrets.data:
@@ -57,10 +50,17 @@ def collect_secrets(config):
                             compartment_id=compartment["id"],
                             compartment_name=compartment["name"],
                             region=region,
-                            state=secret.lifecycle_state,
+                            state=getattr(
+                                secret,
+                                "lifecycle_state",
+                                "",
+                            ),
                             details={
-                                "vault_id": vault.id,
-                                "vault_name": vault.display_name,
+                                "vault_id": getattr(
+                                    secret,
+                                    "vault_id",
+                                    "",
+                                ),
                                 "key_id": getattr(
                                     secret,
                                     "key_id",
@@ -79,5 +79,12 @@ def collect_secrets(config):
                             },
                         )
                     )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR in compartment "
+                    f"{compartment['name']}: {error}"
+                )
 
     return resources
