@@ -7,8 +7,11 @@ from utils.regions import get_regions
 
 def collect_keys(config):
     """
-    Collect all OCI KMS keys across all subscribed regions
-    and accessible compartments.
+    Collect OCI KMS keys across all subscribed regions,
+    compartments, and vaults.
+
+    Secret/key values are never retrieved.
+    Only key metadata is collected.
     """
 
     compartments = get_compartments(config)
@@ -38,6 +41,7 @@ def collect_keys(config):
                 for vault in vaults.data:
 
                     try:
+
                         management_client = (
                             oci.key_management.KmsManagementClient(
                                 region_config,
@@ -49,7 +53,6 @@ def collect_keys(config):
                             oci.pagination.list_call_get_all_results(
                                 management_client.list_keys,
                                 compartment_id=compartment["id"],
-                                vault_id=vault.id,
                             )
                         )
 
