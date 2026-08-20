@@ -7,7 +7,7 @@ from utils.regions import get_regions
 
 def collect_vcn(config):
     """
-    Collect all OCI VCNs across all subscribed regions
+    Collect OCI VCN resources across all subscribed regions
     and accessible compartments.
     """
 
@@ -29,38 +29,83 @@ def collect_vcn(config):
 
         for compartment in compartments:
 
-            vcns = oci.pagination.list_call_get_all_results(
-                virtual_network_client.list_vcns,
-                compartment_id=compartment["id"],
-            )
+            try:
+                vcns = oci.pagination.list_call_get_all_results(
+                    virtual_network_client.list_vcns,
+                    compartment_id=compartment["id"],
+                )
 
-            for vcn in vcns.data:
+                for vcn in vcns.data:
 
-                resources.append(
-                    Resource(
-                        service="VCN",
-                        resource_type="VCN",
-                        name=vcn.display_name,
-                        ocid=vcn.id,
-                        compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=vcn.lifecycle_state,
-                        details={
-                            "cidr_blocks": vcn.cidr_blocks,
-                            "default_route_table_id": (
-                                vcn.default_route_table_id
+                    resources.append(
+                        Resource(
+                            service="VCN",
+                            resource_type="VCN",
+                            name=vcn.display_name,
+                            ocid=vcn.id,
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
+                                vcn,
+                                "lifecycle_state",
+                                "",
                             ),
-                            "default_security_list_id": (
-                                vcn.default_security_list_id
-                            ),
-                            "default_dhcp_options_id": (
-                                vcn.default_dhcp_options_id
-                            ),
-                            "dns_label": vcn.dns_label,
-                            "is_ipv6enabled": vcn.is_ipv6enabled,
-                        },
+                            details={
+                                "cidr_block": getattr(
+                                    vcn,
+                                    "cidr_block",
+                                    "",
+                                ),
+                                "cidr_blocks": getattr(
+                                    vcn,
+                                    "cidr_blocks",
+                                    [],
+                                ),
+                                "ipv6_cidr_blocks": getattr(
+                                    vcn,
+                                    "ipv6_cidr_blocks",
+                                    [],
+                                ),
+                                "is_ipv6_enabled": getattr(
+                                    vcn,
+                                    "is_ipv6_enabled",
+                                    False,
+                                ),
+                                "dns_label": getattr(
+                                    vcn,
+                                    "vcn_domain_name",
+                                    "",
+                                ),
+                                "default_dhcp_options_id": getattr(
+                                    vcn,
+                                    "default_dhcp_options_id",
+                                    "",
+                                ),
+                                "default_route_table_id": getattr(
+                                    vcn,
+                                    "default_route_table_id",
+                                    "",
+                                ),
+                                "default_security_list_id": getattr(
+                                    vcn,
+                                    "default_security_list_id",
+                                    "",
+                                ),
+                                "time_created": getattr(
+                                    vcn,
+                                    "time_created",
+                                    "",
+                                ),
+                            },
+                        )
                     )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR in compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
