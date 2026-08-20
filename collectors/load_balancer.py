@@ -29,41 +29,93 @@ def collect_load_balancer(config):
 
         for compartment in compartments:
 
-            load_balancers = oci.pagination.list_call_get_all_results(
-                load_balancer_client.list_load_balancers,
-                compartment_id=compartment["id"],
-            )
-
-            for load_balancer in load_balancers.data:
-
-                resources.append(
-                    Resource(
-                        service="Load Balancer",
-                        resource_type="Load Balancer",
-                        name=load_balancer.display_name,
-                        ocid=load_balancer.id,
+            try:
+                load_balancers = (
+                    oci.pagination.list_call_get_all_results(
+                        load_balancer_client.list_load_balancers,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=load_balancer.lifecycle_state,
-                        details={
-                            "ip_addresses": [
-                                ip_address.ip_address
-                                for ip_address in (
-                                    load_balancer.ip_addresses or []
-                                )
-                            ],
-                            "shape": load_balancer.shape,
-                            "is_private": load_balancer.is_private,
-                            "subnet_ids": (
-                                load_balancer.subnet_ids
-                            ),
-                            "vcn_id": load_balancer.vcn_id,
-                            "bandwidth_shape_name": (
-                                load_balancer.bandwidth_shape_name
-                            ),
-                        },
                     )
+                )
+
+                for load_balancer in load_balancers.data:
+
+                    ip_addresses = []
+
+                    for ip_address in (
+                        getattr(
+                            load_balancer,
+                            "ip_addresses",
+                            []
+                        ) or []
+                    ):
+                        ip_addresses.append(
+                            getattr(
+                                ip_address,
+                                "ip_address",
+                                ""
+                            )
+                        )
+
+                    resources.append(
+                        Resource(
+                            service="Load Balancer",
+                            resource_type="Load Balancer",
+                            name=load_balancer.display_name,
+                            ocid=load_balancer.id,
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
+                                load_balancer,
+                                "lifecycle_state",
+                                "",
+                            ),
+                            details={
+                                "shape_name": getattr(
+                                    load_balancer,
+                                    "shape_name",
+                                    "",
+                                ),
+                                "is_private": getattr(
+                                    load_balancer,
+                                    "is_private",
+                                    "",
+                                ),
+                                "ip_addresses": ip_addresses,
+                                "subnet_ids": getattr(
+                                    load_balancer,
+                                    "subnet_ids",
+                                    [],
+                                ),
+                                "vcn_id": getattr(
+                                    load_balancer,
+                                    "vcn_id",
+                                    "",
+                                ),
+                                "bandwidth_shape_name": getattr(
+                                    load_balancer,
+                                    "bandwidth_shape_name",
+                                    "",
+                                ),
+                                "shape_details": getattr(
+                                    load_balancer,
+                                    "shape_details",
+                                    None,
+                                ),
+                                "time_created": getattr(
+                                    load_balancer,
+                                    "time_created",
+                                    "",
+                                ),
+                            },
+                        )
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR in compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
