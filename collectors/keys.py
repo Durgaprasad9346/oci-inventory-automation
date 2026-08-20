@@ -23,57 +23,81 @@ def collect_keys(config):
         region_config = config.copy()
         region_config["region"] = region
 
-        kms_management_client = oci.key_management.KmsManagementClient(
+        vault_client = oci.key_management.KmsVaultClient(
             region_config
         )
 
         for compartment in compartments:
 
-            vaults = oci.pagination.list_call_get_all_results(
-                kms_management_client.list_vaults,
-                compartment_id=compartment["id"],
-            )
-
-            for vault in vaults.data:
-
-                keys = oci.pagination.list_call_get_all_results(
-                    kms_management_client.list_keys,
+            try:
+                vaults = oci.pagination.list_call_get_all_results(
+                    vault_client.list_vaults,
                     compartment_id=compartment["id"],
-                    vault_id=vault.id,
                 )
 
-                for key in keys.data:
+                for vault in vaults.data:
 
-                    resources.append(
-                        Resource(
-                            service="Key Management",
-                            resource_type="Key",
-                            name=key.display_name,
-                            ocid=key.id,
-                            compartment_id=compartment["id"],
-                            compartment_name=compartment["name"],
-                            region=region,
-                            state=key.lifecycle_state,
-                            details={
-                                "vault_id": vault.id,
-                                "vault_name": vault.display_name,
-                                "key_shape": getattr(
-                                    key,
-                                    "key_shape",
-                                    None,
-                                ),
-                                "protection_mode": getattr(
-                                    key,
-                                    "protection_mode",
-                                    "",
-                                ),
-                                "time_created": getattr(
-                                    key,
-                                    "time_created",
-                                    "",
-                                ),
-                            },
+                    try:
+                        management_client = (
+                            oci.key_management.KmsManagementClient(
+                                region_config,
+                                service_endpoint=vault.management_endpoint,
+                            )
                         )
-                    )
+
+                        keys = (
+                            oci.pagination.list_call_get_all_results(
+                                management_client.list_keys,
+                                compartment_id=compartment["id"],
+                                vault_id=vault.id,
+                            )
+                        )
+
+                        for key in keys.data:
+
+                            resources.append(
+                                Resource(
+                                    service="Key Management",
+                                    resource_type="Key",
+                                    name=key.display_name,
+                                    ocid=key.id,
+                                    compartment_id=compartment["id"],
+                                    compartment_name=compartment["name"],
+                                    region=region,
+                                    state=getattr(
+                                        key,
+                                        "lifecycle_state",
+                                        "",
+                                    ),
+                                    details={
+                                        "vault_id": vault.id,
+                                        "vault_name": vault.display_name,
+                                        "protection_mode": getattr(
+                                            key,
+                                            "protection_mode",
+                                            "",
+                                        ),
+                                        "time_created": getattr(
+                                            key,
+                                            "time_created",
+                                            "",
+                                        ),
+                                    },
+                                )
+                            )
+
+                    except Exception as error:
+
+                        print(
+                            f"    ERROR collecting keys from vault "
+                            f"{vault.display_name}: {error}"
+                        )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR in compartment "
+                    f"{compartment['name']}: {error}"
+                )
 
     return resources
