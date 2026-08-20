@@ -7,9 +7,8 @@ from utils.regions import get_regions
 
 def collect_exacs(config):
     """
-    Collect all OCI Exadata Cloud Service (ExaCS)
-    infrastructures across all subscribed regions
-    and accessible compartments.
+    Collect OCI Exadata Cloud Service VM Clusters
+    across all subscribed regions and accessible compartments.
     """
 
     compartments = get_compartments(config)
@@ -30,61 +29,77 @@ def collect_exacs(config):
 
         for compartment in compartments:
 
-            infrastructures = (
-                oci.pagination.list_call_get_all_results(
-                    database_client.list_cloud_exadata_infrastructures,
-                    compartment_id=compartment["id"],
-                )
-            )
+            try:
 
-            for infrastructure in infrastructures.data:
-
-                resources.append(
-                    Resource(
-                        service="ExaCS",
-                        resource_type="Exadata Infrastructure",
-                        name=infrastructure.display_name,
-                        ocid=infrastructure.id,
+                vm_clusters = (
+                    oci.pagination.list_call_get_all_results(
+                        database_client.list_cloud_vm_clusters,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=infrastructure.lifecycle_state,
-                        details={
-                            "shape": getattr(
-                                infrastructure,
-                                "shape",
-                                "",
-                            ),
-                            "availability_domain": getattr(
-                                infrastructure,
-                                "availability_domain",
-                                "",
-                            ),
-                            "compute_count": getattr(
-                                infrastructure,
-                                "compute_count",
-                                "",
-                            ),
-                            "storage_count": getattr(
-                                infrastructure,
-                                "storage_count",
-                                "",
-                            ),
-                            "total_storage_size_in_gbs": getattr(
-                                infrastructure,
-                                "total_storage_size_in_gbs",
-                                "",
-                            ),
-                            "cpu_count": getattr(
-                                infrastructure,
-                                "cpu_count",
-                                "",
-                            ),
-                            "cloud_exadata_infrastructure_id": (
-                                infrastructure.id
-                            ),
-                        },
                     )
+                )
+
+                for vm_cluster in vm_clusters.data:
+
+                    resources.append(
+                        Resource(
+                            service="ExaCS",
+                            resource_type="VM Cluster",
+                            name=vm_cluster.display_name,
+                            ocid=vm_cluster.id,
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
+                                vm_cluster,
+                                "lifecycle_state",
+                                "",
+                            ),
+                            details={
+                                "shape": getattr(
+                                    vm_cluster,
+                                    "shape",
+                                    "",
+                                ),
+                                "cpu_core_count": getattr(
+                                    vm_cluster,
+                                    "cpu_core_count",
+                                    "",
+                                ),
+                                "memory_size_in_gbs": getattr(
+                                    vm_cluster,
+                                    "memory_size_in_gbs",
+                                    "",
+                                ),
+                                "db_node_storage_size_in_gbs": getattr(
+                                    vm_cluster,
+                                    "db_node_storage_size_in_gbs",
+                                    "",
+                                ),
+                                "exadata_infrastructure_id": getattr(
+                                    vm_cluster,
+                                    "cloud_exadata_infrastructure_id",
+                                    "",
+                                ),
+                                "vm_cluster_type": getattr(
+                                    vm_cluster,
+                                    "vm_cluster_type",
+                                    "",
+                                ),
+                                "time_created": getattr(
+                                    vm_cluster,
+                                    "time_created",
+                                    "",
+                                ),
+                            },
+                        )
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting ExaCS VM clusters "
+                    f"from compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
