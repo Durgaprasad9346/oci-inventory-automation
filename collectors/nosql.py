@@ -7,8 +7,15 @@ from utils.regions import get_regions
 
 def collect_nosql(config):
     """
-    Collect all OCI NoSQL tables across all subscribed
-    regions and accessible compartments.
+    Collect all OCI NoSQL tables across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing NoSQL details
     """
 
     compartments = get_compartments(config)
@@ -18,7 +25,9 @@ def collect_nosql(config):
 
     for region in regions:
 
-        print(f"  Processing NoSQL region: {region}")
+        print(
+            f"  Processing NoSQL region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -29,55 +38,105 @@ def collect_nosql(config):
 
         for compartment in compartments:
 
-            tables = oci.pagination.list_call_get_all_results(
-                nosql_client.list_tables,
-                compartment_id=compartment["id"],
-            )
+            try:
 
-            for table in tables.data:
-
-                resources.append(
-                    Resource(
-                        service="NoSQL Database",
-                        resource_type="NoSQL Table",
-                        name=table.name,
-                        ocid=table.id,
+                tables = (
+                    oci.pagination.list_call_get_all_results(
+                        nosql_client.list_tables,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=getattr(
-                            table,
-                            "lifecycle_state",
-                            "",
-                        ),
-                        details={
-                            "table_name": getattr(
+                    )
+                )
+
+                for table in tables.data:
+
+                    resources.append(
+                        Resource(
+                            service="NoSQL Database",
+                            resource_type="NoSQL Table",
+                            name=getattr(
                                 table,
                                 "name",
                                 "",
                             ),
-                            "table_state": getattr(
+                            ocid=getattr(
+                                table,
+                                "id",
+                                "",
+                            ),
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
                                 table,
                                 "lifecycle_state",
                                 "",
                             ),
-                            "compartment_id": getattr(
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
                                 table,
-                                "compartment_id",
-                                "",
+                                "time_created",
+                                None,
                             ),
-                            "ddl_statement": getattr(
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
                                 table,
-                                "ddl_statement",
-                                "",
+                                "defined_tags",
+                                None,
                             ),
-                            "is_auto_reclaimable": getattr(
-                                table,
-                                "is_auto_reclaimable",
-                                "",
-                            ),
-                        },
+
+                            # -----------------------------------------
+                            # Existing NoSQL details
+                            # -----------------------------------------
+
+                            details={
+                                "table_name": getattr(
+                                    table,
+                                    "name",
+                                    "",
+                                ),
+                                "table_limits": getattr(
+                                    table,
+                                    "table_limits",
+                                    "",
+                                ),
+                                "compartment_id": getattr(
+                                    table,
+                                    "compartment_id",
+                                    compartment["id"],
+                                ),
+                                "ddl_statement": getattr(
+                                    table,
+                                    "ddl_statement",
+                                    "",
+                                ),
+                                "is_auto_reclaimable": getattr(
+                                    table,
+                                    "is_auto_reclaimable",
+                                    "",
+                                ),
+                                "freeform_tags": getattr(
+                                    table,
+                                    "freeform_tags",
+                                    "",
+                                ),
+                            },
+                        )
                     )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting NoSQL "
+                    f"from compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
