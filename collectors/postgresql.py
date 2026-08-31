@@ -7,15 +7,18 @@ from utils.regions import get_regions
 
 def collect_postgresql(config):
     """
-    Collect all OCI PostgreSQL databases across:
-        - All subscribed regions
-        - All accessible compartments
+    Collect OCI Database with PostgreSQL DB Systems.
 
     Collects:
-        - Resource information
-        - Creation date
+        - PostgreSQL DB System
+        - OCID
+        - Compartment
+        - Region
+        - Lifecycle State
+        - Creation Date
         - OCI Defined Tags
-        - Existing PostgreSQL details
+        - OCI Freeform Tags
+        - PostgreSQL-specific details
     """
 
     compartments = get_compartments(config)
@@ -32,7 +35,11 @@ def collect_postgresql(config):
         region_config = config.copy()
         region_config["region"] = region
 
-        postgres_client = oci.psql.PostgresDbSystemClient(
+        # =========================================================
+        # OCI Database with PostgreSQL client
+        # =========================================================
+
+        postgresql_client = oci.psql.PostgresqlClient(
             region_config
         )
 
@@ -40,33 +47,136 @@ def collect_postgresql(config):
 
             try:
 
-                db_systems = (
+                # =================================================
+                # List PostgreSQL DB Systems
+                # =================================================
+
+                response = (
                     oci.pagination.list_call_get_all_results(
-                        postgres_client.list_db_systems,
+                        postgresql_client.list_db_systems,
                         compartment_id=compartment["id"],
                     )
                 )
 
-                for db_system in db_systems.data:
+                db_systems = response.data
+
+                for db_system in db_systems:
+
+                    db_system_id = getattr(
+                        db_system,
+                        "id",
+                        "",
+                    )
+
+                    display_name = getattr(
+                        db_system,
+                        "display_name",
+                        "",
+                    )
+
+                    # =================================================
+                    # Get detailed DB System information
+                    # =================================================
+
+                    details = {}
+
+                    if db_system_id:
+
+                        try:
+
+                            detail_response = (
+                                postgresql_client.get_db_system(
+                                    db_system_id=db_system_id
+                                )
+                            )
+
+                            db_system_details = (
+                                detail_response.data
+                            )
+
+                            # -----------------------------------------
+                            # Convert SDK model to dictionary where
+                            # possible.
+                            # -----------------------------------------
+
+                            if hasattr(
+                                db_system_details,
+                                "swagger_types",
+                            ):
+
+                                for field_name in (
+                                    db_system_details.swagger_types
+                                ):
+
+                                    try:
+
+                                        value = getattr(
+                                            db_system_details,
+                                            field_name,
+                                            None,
+                                        )
+
+                                        if value is not None:
+
+                                            details[
+                                                field_name
+                                            ] = value
+
+                                    except Exception:
+                                        pass
+
+                            else:
+
+                                if hasattr(
+                                    db_system_details,
+                                    "__dict__",
+                                ):
+
+                                    details.update(
+                                        db_system_details.__dict__
+                                    )
+
+                        except Exception as detail_error:
+
+                            print(
+                                f"    WARNING getting PostgreSQL "
+                                f"DB System details for "
+                                f"{display_name}: "
+                                f"{detail_error}"
+                            )
+
+                    # =================================================
+                    # Build Resource
+                    # =================================================
 
                     resources.append(
                         Resource(
                             service="PostgreSQL",
                             resource_type="PostgreSQL DB System",
-                            name=db_system.display_name,
-                            ocid=db_system.id,
-                            compartment_id=compartment["id"],
-                            compartment_name=compartment["name"],
+
+                            name=display_name,
+
+                            ocid=db_system_id,
+
+                            compartment_id=(
+                                compartment["id"]
+                            ),
+
+                            compartment_name=(
+                                compartment["name"]
+                            ),
+
                             region=region,
+
                             state=getattr(
                                 db_system,
                                 "lifecycle_state",
                                 "",
                             ),
 
-                            # -----------------------------------------
+                            # =================================================
                             # Creation Date
-                            # -----------------------------------------
+                            # =================================================
 
                             time_created=getattr(
                                 db_system,
@@ -74,9 +184,9 @@ def collect_postgresql(config):
                                 None,
                             ),
 
-                            # -----------------------------------------
+                            # =================================================
                             # OCI Defined Tags
-                            # -----------------------------------------
+                            # =================================================
 
                             defined_tags=getattr(
                                 db_system,
@@ -84,56 +194,136 @@ def collect_postgresql(config):
                                 None,
                             ),
 
-                            # -----------------------------------------
-                            # Existing PostgreSQL details
-                            # -----------------------------------------
+                            # =================================================
+                            # OCI Freeform Tags
+                            # =================================================
+
+                            freeform_tags=getattr(
+                                db_system,
+                                "freeform_tags",
+                                None,
+                            ),
+
+                            # =================================================
+                            # PostgreSQL-specific details
+                            # =================================================
 
                             details={
-                                "availability_domain": getattr(
+                                "db_version": getattr(
                                     db_system,
-                                    "availability_domain",
+                                    "db_version",
                                     "",
                                 ),
-                                "subnet_id": getattr(
+
+                                "system_role": getattr(
                                     db_system,
-                                    "subnet_id",
+                                    "system_role",
                                     "",
                                 ),
+
+                                "description": getattr(
+                                    db_system,
+                                    "description",
+                                    "",
+                                ),
+
                                 "shape": getattr(
                                     db_system,
                                     "shape",
                                     "",
                                 ),
-                                "instance_count": getattr(
-                                    db_system,
-                                    "instance_count",
-                                    "",
-                                ),
+
                                 "instance_ocpu_count": getattr(
                                     db_system,
                                     "instance_ocpu_count",
                                     "",
                                 ),
+
                                 "instance_memory_size_in_gbs": getattr(
                                     db_system,
                                     "instance_memory_size_in_gbs",
                                     "",
                                 ),
-                                "storage_details": getattr(
+
+                                "availability_domain": getattr(
                                     db_system,
-                                    "storage_details",
+                                    "availability_domain",
                                     "",
                                 ),
-                                "postgres_version": getattr(
+
+                                "subnet_id": getattr(
                                     db_system,
-                                    "db_version",
+                                    "subnet_id",
                                     "",
                                 ),
-                                "system_type": getattr(
+
+                                "nsg_ids": getattr(
                                     db_system,
-                                    "system_type",
+                                    "nsg_ids",
                                     "",
                                 ),
+
+                                "private_ip": getattr(
+                                    db_system,
+                                    "private_ip",
+                                    "",
+                                ),
+
+                                "endpoint": getattr(
+                                    db_system,
+                                    "endpoint",
+                                    "",
+                                ),
+
+                                "backup_policy": getattr(
+                                    db_system,
+                                    "backup_policy",
+                                    "",
+                                ),
+
+                                "is_h_a": getattr(
+                                    db_system,
+                                    "is_h_a",
+                                    "",
+                                ),
+
+                                "is_read_only": getattr(
+                                    db_system,
+                                    "is_read_only",
+                                    "",
+                                ),
+
+                                "lifecycle_details": getattr(
+                                    db_system,
+                                    "lifecycle_details",
+                                    "",
+                                ),
+
+                                "time_of_deletion": getattr(
+                                    db_system,
+                                    "time_of_deletion",
+                                    None,
+                                ),
+
+                                "configuration_id": getattr(
+                                    db_system,
+                                    "configuration_id",
+                                    "",
+                                ),
+
+                                "freeform_tags": getattr(
+                                    db_system,
+                                    "freeform_tags",
+                                    None,
+                                ),
+
+                                "defined_tags": getattr(
+                                    db_system,
+                                    "defined_tags",
+                                    None,
+                                ),
+
+                                "detailed_db_system": details,
                             },
                         )
                     )
