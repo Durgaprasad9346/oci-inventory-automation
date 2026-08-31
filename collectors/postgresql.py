@@ -7,8 +7,15 @@ from utils.regions import get_regions
 
 def collect_postgresql(config):
     """
-    Collect all OCI PostgreSQL database systems across
-    all subscribed regions and accessible compartments.
+    Collect all OCI PostgreSQL databases across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing PostgreSQL details
     """
 
     compartments = get_compartments(config)
@@ -18,72 +25,125 @@ def collect_postgresql(config):
 
     for region in regions:
 
-        print(f"  Processing PostgreSQL region: {region}")
+        print(
+            f"  Processing PostgreSQL region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
 
-        postgresql_client = oci.psql.PostgresqlClient(
+        postgres_client = oci.psql.PostgresDbSystemClient(
             region_config
         )
 
         for compartment in compartments:
 
-            db_systems = oci.pagination.list_call_get_all_results(
-                postgresql_client.list_db_systems,
-                compartment_id=compartment["id"],
-            )
+            try:
 
-            for db_system in db_systems.data:
-
-                resources.append(
-                    Resource(
-                        service="PostgreSQL",
-                        resource_type="PostgreSQL DB System",
-                        name=db_system.display_name,
-                        ocid=db_system.id,
+                db_systems = (
+                    oci.pagination.list_call_get_all_results(
+                        postgres_client.list_db_systems,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=db_system.lifecycle_state,
-                        details={
-                            "availability_domain": getattr(
+                    )
+                )
+
+                for db_system in db_systems.data:
+
+                    resources.append(
+                        Resource(
+                            service="PostgreSQL",
+                            resource_type="PostgreSQL DB System",
+                            name=db_system.display_name,
+                            ocid=db_system.id,
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
                                 db_system,
-                                "availability_domain",
+                                "lifecycle_state",
                                 "",
                             ),
-                            "shape": getattr(
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
                                 db_system,
-                                "shape",
-                                "",
-                            ),
-                            "instance_count": getattr(
-                                db_system,
-                                "instance_count",
-                                "",
-                            ),
-                            "storage_details": getattr(
-                                db_system,
-                                "storage_details",
+                                "time_created",
                                 None,
                             ),
-                            "subnet_id": getattr(
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
                                 db_system,
-                                "subnet_id",
-                                "",
+                                "defined_tags",
+                                None,
                             ),
-                            "system_type": getattr(
-                                db_system,
-                                "system_type",
-                                "",
-                            ),
-                            "postgresql_version": getattr(
-                                db_system,
-                                "postgresql_version",
-                                "",
-                            ),
-                        },
+
+                            # -----------------------------------------
+                            # Existing PostgreSQL details
+                            # -----------------------------------------
+
+                            details={
+                                "availability_domain": getattr(
+                                    db_system,
+                                    "availability_domain",
+                                    "",
+                                ),
+                                "subnet_id": getattr(
+                                    db_system,
+                                    "subnet_id",
+                                    "",
+                                ),
+                                "shape": getattr(
+                                    db_system,
+                                    "shape",
+                                    "",
+                                ),
+                                "instance_count": getattr(
+                                    db_system,
+                                    "instance_count",
+                                    "",
+                                ),
+                                "instance_ocpu_count": getattr(
+                                    db_system,
+                                    "instance_ocpu_count",
+                                    "",
+                                ),
+                                "instance_memory_size_in_gbs": getattr(
+                                    db_system,
+                                    "instance_memory_size_in_gbs",
+                                    "",
+                                ),
+                                "storage_details": getattr(
+                                    db_system,
+                                    "storage_details",
+                                    "",
+                                ),
+                                "postgres_version": getattr(
+                                    db_system,
+                                    "db_version",
+                                    "",
+                                ),
+                                "system_type": getattr(
+                                    db_system,
+                                    "system_type",
+                                    "",
+                                ),
+                            },
+                        )
                     )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting PostgreSQL "
+                    f"from compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
