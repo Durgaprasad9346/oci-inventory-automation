@@ -8,9 +8,16 @@ from utils.availability_domains import get_availability_domains
 
 def collect_boot_volume(config):
     """
-    Collect all OCI Boot Volumes across
-    all subscribed regions, availability domains,
-    and accessible compartments.
+    Collect all OCI Boot Volumes across:
+        - All subscribed regions
+        - All availability domains
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing Boot Volume details
     """
 
     compartments = get_compartments(config)
@@ -20,7 +27,9 @@ def collect_boot_volume(config):
 
     for region in regions:
 
-        print(f"  Processing Boot Volume region: {region}")
+        print(
+            f"  Processing Boot Volume region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -38,33 +47,93 @@ def collect_boot_volume(config):
 
             for compartment in compartments:
 
-                boot_volumes = oci.pagination.list_call_get_all_results(
-                    blockstorage_client.list_boot_volumes,
-                    availability_domain=availability_domain,
-                    compartment_id=compartment["id"],
-                )
+                try:
 
-                for boot_volume in boot_volumes.data:
-
-                    resources.append(
-                        Resource(
-                            service="Boot Volume",
-                            resource_type="Boot Volume",
-                            name=boot_volume.display_name,
-                            ocid=boot_volume.id,
+                    boot_volumes = (
+                        oci.pagination.list_call_get_all_results(
+                            blockstorage_client.list_boot_volumes,
+                            availability_domain=availability_domain,
                             compartment_id=compartment["id"],
-                            compartment_name=compartment["name"],
-                            region=region,
-                            state=boot_volume.lifecycle_state,
-                            details={
-                                "availability_domain": (
-                                    boot_volume.availability_domain
-                                ),
-                                "size_in_gbs": (
-                                    boot_volume.size_in_gbs
-                                ),
-                            },
                         )
+                    )
+
+                    for boot_volume in boot_volumes.data:
+
+                        resources.append(
+                            Resource(
+                                service="Boot Volume",
+                                resource_type="Boot Volume",
+                                name=boot_volume.display_name,
+                                ocid=boot_volume.id,
+                                compartment_id=compartment["id"],
+                                compartment_name=compartment["name"],
+                                region=region,
+                                state=getattr(
+                                    boot_volume,
+                                    "lifecycle_state",
+                                    "",
+                                ),
+
+                                # -----------------------------------------
+                                # Creation Date
+                                # -----------------------------------------
+
+                                time_created=getattr(
+                                    boot_volume,
+                                    "time_created",
+                                    None,
+                                ),
+
+                                # -----------------------------------------
+                                # OCI Defined Tags
+                                # -----------------------------------------
+
+                                defined_tags=getattr(
+                                    boot_volume,
+                                    "defined_tags",
+                                    None,
+                                ),
+
+                                # -----------------------------------------
+                                # Existing details
+                                # -----------------------------------------
+
+                                details={
+                                    "availability_domain": getattr(
+                                        boot_volume,
+                                        "availability_domain",
+                                        "",
+                                    ),
+                                    "size_in_gbs": getattr(
+                                        boot_volume,
+                                        "size_in_gbs",
+                                        "",
+                                    ),
+                                    "vpus_per_gb": getattr(
+                                        boot_volume,
+                                        "vpus_per_gb",
+                                        "",
+                                    ),
+                                    "volume_group_id": getattr(
+                                        boot_volume,
+                                        "volume_group_id",
+                                        "",
+                                    ),
+                                    "source_details": getattr(
+                                        boot_volume,
+                                        "source_details",
+                                        "",
+                                    ),
+                                },
+                            )
+                        )
+
+                except Exception as error:
+
+                    print(
+                        f"    ERROR collecting Boot Volume "
+                        f"from compartment "
+                        f"{compartment['name']}: {error}"
                     )
 
     return resources
