@@ -12,10 +12,14 @@ def collect_vault(config):
         - All accessible compartments
 
     Collects:
-        - Resource information
+        - Vault name
+        - OCID
+        - Compartment
+        - Region
+        - Lifecycle state
         - Creation date
         - OCI Defined Tags
-        - Existing Vault details
+        - Vault details
     """
 
     compartments = get_compartments(config)
@@ -25,14 +29,18 @@ def collect_vault(config):
 
     for region in regions:
 
-        print(
-            f"  Processing Vault region: {region}"
-        )
+        print(f"  Processing Vault region: {region}")
 
         region_config = config.copy()
         region_config["region"] = region
 
-        vault_client = oci.vault.VaultsClient(
+        # ---------------------------------------------------------
+        # IMPORTANT:
+        # Vaults are listed using KmsVaultClient.
+        # VaultsClient is for Secrets operations.
+        # ---------------------------------------------------------
+
+        kms_vault_client = oci.key_management.KmsVaultClient(
             region_config
         )
 
@@ -42,7 +50,7 @@ def collect_vault(config):
 
                 vaults = (
                     oci.pagination.list_call_get_all_results(
-                        vault_client.list_vaults,
+                        kms_vault_client.list_vaults,
                         compartment_id=compartment["id"],
                     )
                 )
@@ -51,7 +59,7 @@ def collect_vault(config):
 
                     resources.append(
                         Resource(
-                            service="Vault",
+                            service="Key Management",
                             resource_type="Vault",
                             name=getattr(
                                 vault,
@@ -72,9 +80,9 @@ def collect_vault(config):
                                 "",
                             ),
 
-                            # -----------------------------------------
+                            # -------------------------------------------------
                             # Creation Date
-                            # -----------------------------------------
+                            # -------------------------------------------------
 
                             time_created=getattr(
                                 vault,
@@ -82,9 +90,9 @@ def collect_vault(config):
                                 None,
                             ),
 
-                            # -----------------------------------------
+                            # -------------------------------------------------
                             # OCI Defined Tags
-                            # -----------------------------------------
+                            # -------------------------------------------------
 
                             defined_tags=getattr(
                                 vault,
@@ -92,9 +100,9 @@ def collect_vault(config):
                                 None,
                             ),
 
-                            # -----------------------------------------
-                            # Existing Vault details
-                            # -----------------------------------------
+                            # -------------------------------------------------
+                            # Vault details
+                            # -------------------------------------------------
 
                             details={
                                 "vault_type": getattr(
@@ -112,10 +120,25 @@ def collect_vault(config):
                                     "management_endpoint",
                                     "",
                                 ),
-                                "restored_from_vault_id": getattr(
+                                "is_primary": getattr(
                                     vault,
-                                    "restored_from_vault_id",
+                                    "is_primary",
                                     "",
+                                ),
+                                "external_key_manager_metadata": getattr(
+                                    vault,
+                                    "external_key_manager_metadata",
+                                    "",
+                                ),
+                                "lifecycle_details": getattr(
+                                    vault,
+                                    "lifecycle_details",
+                                    "",
+                                ),
+                                "time_of_deletion": getattr(
+                                    vault,
+                                    "time_of_deletion",
+                                    None,
                                 ),
                             },
                         )
@@ -124,8 +147,7 @@ def collect_vault(config):
             except Exception as error:
 
                 print(
-                    f"    ERROR collecting Vault "
-                    f"from compartment "
+                    f"    ERROR collecting Vault from compartment "
                     f"{compartment['name']}: {error}"
                 )
 
