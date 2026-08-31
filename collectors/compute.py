@@ -10,6 +10,17 @@ def collect_compute(config):
     Collect all OCI Compute instances
     from all accessible compartments
     across all subscribed regions.
+
+    For each Compute instance we collect:
+
+    - Resource name
+    - Resource type
+    - OCID
+    - Compartment
+    - Region
+    - Lifecycle state
+    - Creation date
+    - Defined tags
     """
 
     compartments = get_compartments(config)
@@ -30,24 +41,81 @@ def collect_compute(config):
 
         for compartment in compartments:
 
-            instances = oci.pagination.list_call_get_all_results(
-                compute_client.list_instances,
-                compartment["id"],
-            )
+            try:
 
-            for instance in instances.data:
-
-                resources.append(
-                    Resource(
-                        service="Compute",
-                        resource_type="Instance",
-                        name=instance.display_name,
-                        ocid=instance.id,
-                        compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=instance.lifecycle_state,
+                instances = (
+                    oci.pagination.list_call_get_all_results(
+                        compute_client.list_instances,
+                        compartment["id"],
                     )
+                )
+
+                for instance in instances.data:
+
+                    resources.append(
+                        Resource(
+                            service="Compute",
+                            resource_type="Instance",
+                            name=instance.display_name,
+                            ocid=instance.id,
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
+                                instance,
+                                "lifecycle_state",
+                                "",
+                            ),
+
+                            # Creation date
+                            time_created=getattr(
+                                instance,
+                                "time_created",
+                                None,
+                            ),
+
+                            # OCI Defined Tags
+                            defined_tags=getattr(
+                                instance,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            details={
+                                "availability_domain": getattr(
+                                    instance,
+                                    "availability_domain",
+                                    "",
+                                ),
+                                "shape": getattr(
+                                    instance,
+                                    "shape",
+                                    "",
+                                ),
+                                "fault_domain": getattr(
+                                    instance,
+                                    "fault_domain",
+                                    "",
+                                ),
+                                "subnet_id": getattr(
+                                    instance,
+                                    "subnet_id",
+                                    "",
+                                ),
+                                "vnic_id": getattr(
+                                    instance,
+                                    "vnic_id",
+                                    "",
+                                ),
+                            },
+                        )
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR in compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
