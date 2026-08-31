@@ -10,41 +10,244 @@ from openpyxl.utils import get_column_letter
 
 
 # ============================================================
-# EXCEL VALUE SAFETY
+# EXCEL SAFE VALUE
 # ============================================================
 
 def excel_safe_value(value):
     """
-    Convert OCI SDK values into values supported by Excel.
+    Convert OCI/Python values into values that openpyxl/Excel
+    can safely store.
 
-    OCI commonly returns timezone-aware datetime objects:
-
-        2026-08-31 10:30:00+00:00
-
-    openpyxl cannot write timezone-aware datetime values.
-
-    We remove only the timezone information and preserve the
-    date/time itself.
+    Handles:
+        - timezone-aware datetime
+        - timezone-aware time
+        - date
+        - dict
+        - list
+        - tuple
+        - set
+        - OCI SDK objects
+        - primitive values
     """
+
+    if value is None:
+        return ""
+
+    # --------------------------------------------------------
+    # datetime
+    # --------------------------------------------------------
 
     if isinstance(value, datetime):
 
         if value.tzinfo is not None:
-            return value.replace(tzinfo=None)
+            return value.replace(
+                tzinfo=None
+            )
 
         return value
+
+    # --------------------------------------------------------
+    # time
+    # --------------------------------------------------------
 
     if isinstance(value, time):
 
         if value.tzinfo is not None:
-            return value.replace(tzinfo=None)
+            return value.replace(
+                tzinfo=None
+            )
 
         return value
+
+    # --------------------------------------------------------
+    # date
+    # --------------------------------------------------------
 
     if isinstance(value, date):
         return value
 
+    # --------------------------------------------------------
+    # Dictionary
+    # --------------------------------------------------------
+
+    if isinstance(value, dict):
+
+        try:
+
+            return json.dumps(
+                value,
+                default=serialize_object,
+                ensure_ascii=False,
+            )
+
+        except Exception:
+
+            return str(value)
+
+    # --------------------------------------------------------
+    # List / tuple / set
+    # --------------------------------------------------------
+
+    if isinstance(
+        value,
+        (list, tuple, set),
+    ):
+
+        try:
+
+            return json.dumps(
+                list(value),
+                default=serialize_object,
+                ensure_ascii=False,
+            )
+
+        except Exception:
+
+            return str(value)
+
+    # --------------------------------------------------------
+    # OCI SDK objects
+    # --------------------------------------------------------
+
+    if not isinstance(
+        value,
+        (
+            str,
+            int,
+            float,
+            bool,
+        ),
+    ):
+
+        # Some OCI SDK objects contain a to_dict()
+        # method.
+
+        if hasattr(
+            value,
+            "to_dict",
+        ):
+
+            try:
+
+                converted = value.to_dict()
+
+                return json.dumps(
+                    converted,
+                    default=serialize_object,
+                    ensure_ascii=False,
+                )
+
+            except Exception:
+                pass
+
+        # Some SDK objects expose __dict__.
+
+        if hasattr(
+            value,
+            "__dict__",
+        ):
+
+            try:
+
+                converted = {}
+
+                for key, item in (
+                    value.__dict__.items()
+                ):
+
+                    if key.startswith("_"):
+                        continue
+
+                    converted[key] = item
+
+                return json.dumps(
+                    converted,
+                    default=serialize_object,
+                    ensure_ascii=False,
+                )
+
+            except Exception:
+                pass
+
+    # --------------------------------------------------------
+    # Primitive values
+    # --------------------------------------------------------
+
     return value
+
+
+# ============================================================
+# SERIALIZE COMPLEX OBJECTS
+# ============================================================
+
+def serialize_object(value):
+    """
+    JSON serializer for OCI SDK objects and nested values.
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+
+        if value.tzinfo is not None:
+            value = value.replace(
+                tzinfo=None
+            )
+
+        return value.isoformat(
+            sep=" "
+        )
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if isinstance(value, time):
+
+        if value.tzinfo is not None:
+            value = value.replace(
+                tzinfo=None
+            )
+
+        return value.isoformat()
+
+    if isinstance(
+        value,
+        (list, tuple, set),
+    ):
+
+        return list(value)
+
+    if isinstance(value, dict):
+        return value
+
+    if hasattr(
+        value,
+        "to_dict",
+    ):
+
+        try:
+            return value.to_dict()
+        except Exception:
+            pass
+
+    if hasattr(
+        value,
+        "__dict__",
+    ):
+
+        try:
+
+            return {
+                key: item
+                for key, item in value.__dict__.items()
+                if not key.startswith("_")
+            }
+
+        except Exception:
+            pass
+
+    return str(value)
 
 
 # ============================================================
@@ -52,23 +255,30 @@ def excel_safe_value(value):
 # ============================================================
 
 def safe_string(value):
-    """
-    Safely convert complex OCI values to strings.
-    """
 
     if value is None:
         return ""
 
-    if isinstance(value, (dict, list, tuple, set)):
+    if isinstance(
+        value,
+        (
+            dict,
+            list,
+            tuple,
+            set,
+        ),
+    ):
 
         try:
+
             return json.dumps(
                 value,
-                default=str,
+                default=serialize_object,
                 ensure_ascii=False,
             )
 
         except Exception:
+
             return str(value)
 
     return str(value)
@@ -78,14 +288,35 @@ def safe_string(value):
 # FLATTEN DICTIONARY
 # ============================================================
 
-def flatten_dict(data, prefix=""):
+def flatten_dict(
+    data,
+    prefix="",
+):
     """
-    Flatten nested dictionaries for Excel columns.
+    Flatten nested dictionaries.
+
+    Example:
+
+        {
+            "maxlife": {
+                "env": "prod",
+                "project": "abc"
+            }
+        }
+
+    becomes:
+
+        maxlife.env = prod
+        maxlife.project = abc
     """
 
     result = {}
 
-    if not isinstance(data, dict):
+    if not isinstance(
+        data,
+        dict,
+    ):
+
         return result
 
     for key, value in data.items():
@@ -93,28 +324,34 @@ def flatten_dict(data, prefix=""):
         key = str(key)
 
         if prefix:
-            new_key = f"{prefix}.{key}"
+
+            new_key = (
+                f"{prefix}.{key}"
+            )
+
         else:
+
             new_key = key
 
-        if isinstance(value, dict):
+        if isinstance(
+            value,
+            dict,
+        ):
 
-            result.update(
-                flatten_dict(
-                    value,
-                    new_key,
-                )
+            nested = flatten_dict(
+                value,
+                new_key,
             )
 
-        elif isinstance(value, (list, tuple, set)):
-
-            result[new_key] = safe_string(
-                value
+            result.update(
+                nested
             )
 
         else:
 
-            result[new_key] = excel_safe_value(
+            result[
+                new_key
+            ] = excel_safe_value(
                 value
             )
 
@@ -122,27 +359,34 @@ def flatten_dict(data, prefix=""):
 
 
 # ============================================================
-# OBJECT / DICTIONARY VALUE
+# GET FIELD
 # ============================================================
 
-def get_field(obj, *names, default=None):
+def get_field(
+    obj,
+    *names,
+    default=None,
+):
     """
-    Read a field from either:
-        - dictionary
-        - Resource object
-        - OCI SDK object
+    Get a field from either a dictionary or object.
     """
 
     for name in names:
 
-        if isinstance(obj, dict):
+        if isinstance(
+            obj,
+            dict,
+        ):
 
             if name in obj:
                 return obj[name]
 
         else:
 
-            if hasattr(obj, name):
+            if hasattr(
+                obj,
+                name,
+            ):
 
                 try:
 
@@ -161,24 +405,27 @@ def get_field(obj, *names, default=None):
 
 
 # ============================================================
-# CONVERT RESOURCE TO DICT
+# RESOURCE TO DICT
 # ============================================================
 
 def resource_to_dict(resource):
     """
-    Convert Resource objects and dictionaries into a dictionary.
+    Convert Resource objects into dictionaries.
     """
 
-    if isinstance(resource, dict):
-        return dict(resource)
+    if isinstance(
+        resource,
+        dict,
+    ):
+
+        return dict(
+            resource
+        )
 
     data = {}
 
-    # --------------------------------------------------------
-    # Standard inventory fields
-    # --------------------------------------------------------
-
     fields = [
+
         "service",
         "service_name",
 
@@ -225,13 +472,21 @@ def resource_to_dict(resource):
         "freeformTags",
 
         "details",
+
         "additional_details",
         "additionalDetails",
     ]
 
+    # --------------------------------------------------------
+    # Known fields
+    # --------------------------------------------------------
+
     for field in fields:
 
-        if hasattr(resource, field):
+        if hasattr(
+            resource,
+            field,
+        ):
 
             try:
 
@@ -241,91 +496,124 @@ def resource_to_dict(resource):
                 )
 
                 if value is not None:
-                    data[field] = value
+
+                    data[
+                        field
+                    ] = value
 
             except Exception:
                 pass
 
     # --------------------------------------------------------
-    # Capture any other public Resource attributes
+    # Object __dict__
     # --------------------------------------------------------
 
-    if hasattr(resource, "__dict__"):
+    if hasattr(
+        resource,
+        "__dict__",
+    ):
 
-        for key, value in resource.__dict__.items():
+        try:
 
-            if key.startswith("_"):
-                continue
+            for key, value in (
+                resource.__dict__.items()
+            ):
 
-            if key not in data:
-                data[key] = value
+                if key.startswith("_"):
+                    continue
+
+                if key not in data:
+
+                    data[key] = value
+
+        except Exception:
+            pass
 
     return data
 
 
 # ============================================================
-# TAG EXTRACTION
+# DEFINED TAGS
 # ============================================================
 
-def extract_defined_tags(data):
-    """
-    Extract OCI defined tags and flatten them.
-
-    Example:
-
-        {
-            "CostCenter": {
-                "Environment": "DEV"
-            }
-        }
-
-    becomes:
-
-        CostCenter.Environment
-    """
+def extract_defined_tags(
+    data,
+):
 
     tags = (
-        data.get("defined_tags")
-        or data.get("definedTags")
+        data.get(
+            "defined_tags"
+        )
+        or data.get(
+            "definedTags"
+        )
         or {}
     )
 
-    if not isinstance(tags, dict):
+    if not isinstance(
+        tags,
+        dict,
+    ):
+
         return {}
 
-    return flatten_dict(tags)
+    return flatten_dict(
+        tags
+    )
 
 
-def extract_freeform_tags(data):
-    """
-    Extract OCI freeform tags.
-    """
+# ============================================================
+# FREEFORM TAGS
+# ============================================================
+
+def extract_freeform_tags(
+    data,
+):
 
     tags = (
-        data.get("freeform_tags")
-        or data.get("freeformTags")
+        data.get(
+            "freeform_tags"
+        )
+        or data.get(
+            "freeformTags"
+        )
         or {}
     )
 
-    if not isinstance(tags, dict):
+    if not isinstance(
+        tags,
+        dict,
+    ):
+
         return {}
 
-    return flatten_dict(tags)
+    return flatten_dict(
+        tags
+    )
 
 
-def include_tag(tag_name):
-    """
-    Exclude Schedule:* tags from individual tag columns.
-    """
+# ============================================================
+# TAG FILTER
+# ============================================================
+
+def include_tag(
+    tag_name,
+):
 
     if not tag_name:
         return False
 
-    tag_name = str(tag_name)
+    tag_name = str(
+        tag_name
+    )
+
+    # Keep Schedule tags in the main resource details,
+    # but do not create individual Schedule:* columns.
 
     if tag_name.lower().startswith(
         "schedule:"
     ):
+
         return False
 
     return True
@@ -335,16 +623,23 @@ def include_tag(tag_name):
 # CREATION DATE
 # ============================================================
 
-def get_creation_date(data):
-    """
-    Get creation date from common OCI/collector fields.
-    """
+def get_creation_date(
+    data,
+):
 
     value = (
-        data.get("time_created")
-        or data.get("timeCreated")
-        or data.get("creation_date")
-        or data.get("created_at")
+        data.get(
+            "time_created"
+        )
+        or data.get(
+            "timeCreated"
+        )
+        or data.get(
+            "creation_date"
+        )
+        or data.get(
+            "created_at"
+        )
     )
 
     return excel_safe_value(
@@ -353,25 +648,42 @@ def get_creation_date(data):
 
 
 # ============================================================
-# BUILD STANDARD RESOURCE ROW
+# STANDARD COLUMNS
 # ============================================================
 
 STANDARD_COLUMNS = [
+
     "Service",
+
     "Resource Type",
+
     "Resource Name",
+
     "Resource OCID",
+
     "Compartment Name",
+
     "Compartment OCID",
+
     "Region",
+
     "Availability Domain",
+
     "Lifecycle State",
+
     "Lifecycle Details",
+
     "Creation Date",
 ]
 
 
-def build_resource_row(resource):
+# ============================================================
+# BUILD RESOURCE ROW
+# ============================================================
+
+def build_resource_row(
+    resource,
+):
 
     data = resource_to_dict(
         resource
@@ -384,8 +696,12 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Service"] = (
-        data.get("service")
-        or data.get("service_name")
+        data.get(
+            "service"
+        )
+        or data.get(
+            "service_name"
+        )
         or ""
     )
 
@@ -394,8 +710,12 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Resource Type"] = (
-        data.get("resource_type")
-        or data.get("resourceType")
+        data.get(
+            "resource_type"
+        )
+        or data.get(
+            "resourceType"
+        )
         or ""
     )
 
@@ -404,9 +724,15 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Resource Name"] = (
-        data.get("name")
-        or data.get("display_name")
-        or data.get("displayName")
+        data.get(
+            "name"
+        )
+        or data.get(
+            "display_name"
+        )
+        or data.get(
+            "displayName"
+        )
         or ""
     )
 
@@ -415,9 +741,15 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Resource OCID"] = (
-        data.get("ocid")
-        or data.get("identifier")
-        or data.get("id")
+        data.get(
+            "ocid"
+        )
+        or data.get(
+            "identifier"
+        )
+        or data.get(
+            "id"
+        )
         or ""
     )
 
@@ -426,14 +758,22 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Compartment Name"] = (
-        data.get("compartment_name")
-        or data.get("compartmentName")
+        data.get(
+            "compartment_name"
+        )
+        or data.get(
+            "compartmentName"
+        )
         or ""
     )
 
     row["Compartment OCID"] = (
-        data.get("compartment_id")
-        or data.get("compartmentId")
+        data.get(
+            "compartment_id"
+        )
+        or data.get(
+            "compartmentId"
+        )
         or ""
     )
 
@@ -442,7 +782,9 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Region"] = (
-        data.get("region")
+        data.get(
+            "region"
+        )
         or ""
     )
 
@@ -451,8 +793,12 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Availability Domain"] = (
-        data.get("availability_domain")
-        or data.get("availabilityDomain")
+        data.get(
+            "availability_domain"
+        )
+        or data.get(
+            "availabilityDomain"
+        )
         or ""
     )
 
@@ -461,9 +807,15 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Lifecycle State"] = (
-        data.get("state")
-        or data.get("lifecycle_state")
-        or data.get("lifecycleState")
+        data.get(
+            "state"
+        )
+        or data.get(
+            "lifecycle_state"
+        )
+        or data.get(
+            "lifecycleState"
+        )
         or ""
     )
 
@@ -472,8 +824,12 @@ def build_resource_row(resource):
     # --------------------------------------------------------
 
     row["Lifecycle Details"] = (
-        data.get("lifecycle_details")
-        or data.get("lifecycleDetails")
+        data.get(
+            "lifecycle_details"
+        )
+        or data.get(
+            "lifecycleDetails"
+        )
         or ""
     )
 
@@ -481,21 +837,29 @@ def build_resource_row(resource):
     # Creation Date
     # --------------------------------------------------------
 
-    row["Creation Date"] = get_creation_date(
-        data
+    row["Creation Date"] = (
+        get_creation_date(
+            data
+        )
     )
 
-    # --------------------------------------------------------
-    # Defined Tags
-    # --------------------------------------------------------
+    # ========================================================
+    # DEFINED TAGS
+    # ========================================================
 
-    defined_tags = extract_defined_tags(
-        data
+    defined_tags = (
+        extract_defined_tags(
+            data
+        )
     )
 
-    for tag_name, tag_value in defined_tags.items():
+    for tag_name, tag_value in (
+        defined_tags.items()
+    ):
 
-        if include_tag(tag_name):
+        if include_tag(
+            tag_name
+        ):
 
             row[
                 f"Tag: {tag_name}"
@@ -503,17 +867,23 @@ def build_resource_row(resource):
                 tag_value
             )
 
-    # --------------------------------------------------------
-    # Freeform Tags
-    # --------------------------------------------------------
+    # ========================================================
+    # FREEFORM TAGS
+    # ========================================================
 
-    freeform_tags = extract_freeform_tags(
-        data
+    freeform_tags = (
+        extract_freeform_tags(
+            data
+        )
     )
 
-    for tag_name, tag_value in freeform_tags.items():
+    for tag_name, tag_value in (
+        freeform_tags.items()
+    ):
 
-        if include_tag(tag_name):
+        if include_tag(
+            tag_name
+        ):
 
             row[
                 f"Freeform Tag: {tag_name}"
@@ -521,29 +891,44 @@ def build_resource_row(resource):
                 tag_value
             )
 
-    # --------------------------------------------------------
-    # Resource-specific details
-    # --------------------------------------------------------
+    # ========================================================
+    # RESOURCE DETAILS
+    # ========================================================
 
     details = (
-        data.get("details")
-        or data.get("additional_details")
-        or data.get("additionalDetails")
+        data.get(
+            "details"
+        )
+        or data.get(
+            "additional_details"
+        )
+        or data.get(
+            "additionalDetails"
+        )
         or {}
     )
 
-    if isinstance(details, dict):
+    if isinstance(
+        details,
+        dict,
+    ):
 
-        flattened_details = flatten_dict(
-            details,
-            "Details",
+        flattened_details = (
+            flatten_dict(
+                details,
+                "Details",
+            )
         )
 
-        for key, value in flattened_details.items():
+        for key, value in (
+            flattened_details.items()
+        ):
 
             if key not in row:
 
-                row[key] = excel_safe_value(
+                row[
+                    key
+                ] = excel_safe_value(
                     value
                 )
 
@@ -554,13 +939,16 @@ def build_resource_row(resource):
 # GET COLUMNS
 # ============================================================
 
-def get_columns(rows):
+def get_columns(
+    rows,
+):
 
     columns = list(
         STANDARD_COLUMNS
     )
 
     tag_columns = set()
+
     other_columns = set()
 
     for row in rows:
@@ -571,8 +959,12 @@ def get_columns(rows):
                 continue
 
             if (
-                str(key).startswith("Tag:")
-                or str(key).startswith("Freeform Tag:")
+                str(key).startswith(
+                    "Tag:"
+                )
+                or str(key).startswith(
+                    "Freeform Tag:"
+                )
             ):
 
                 tag_columns.add(
@@ -586,26 +978,34 @@ def get_columns(rows):
                 )
 
     columns.extend(
-        sorted(tag_columns)
+        sorted(
+            tag_columns
+        )
     )
 
     columns.extend(
-        sorted(other_columns)
+        sorted(
+            other_columns
+        )
     )
 
     return columns
 
 
 # ============================================================
-# SHEET NAME
+# SANITIZE SHEET NAME
 # ============================================================
 
-def sanitize_sheet_name(name):
+def sanitize_sheet_name(
+    name,
+):
 
     if not name:
         name = "Resources"
 
-    name = str(name)
+    name = str(
+        name
+    )
 
     name = re.sub(
         r"[\[\]\:\*\?\/\\]",
@@ -620,6 +1020,10 @@ def sanitize_sheet_name(name):
 
     return name[:31]
 
+
+# ============================================================
+# UNIQUE SHEET NAME
+# ============================================================
 
 def get_unique_sheet_name(
     workbook,
@@ -637,14 +1041,21 @@ def get_unique_sheet_name(
 
     while True:
 
-        suffix = f"_{counter}"
+        suffix = (
+            f"_{counter}"
+        )
 
         candidate = (
-            base[:31 - len(suffix)]
+            base[
+                :31 - len(suffix)
+            ]
             + suffix
         )
 
-        if candidate not in workbook.sheetnames:
+        if candidate not in (
+            workbook.sheetnames
+        ):
+
             return candidate
 
         counter += 1
@@ -663,20 +1074,22 @@ def write_resource_sheet(
     if not resources:
         return None
 
-    sheet_name = get_unique_sheet_name(
-        workbook,
-        sheet_name,
+    sheet_name = (
+        get_unique_sheet_name(
+            workbook,
+            sheet_name,
+        )
     )
 
     ws = workbook.create_sheet(
         title=sheet_name
     )
 
+    rows = []
+
     # --------------------------------------------------------
     # Convert resources
     # --------------------------------------------------------
-
-    rows = []
 
     for resource in resources:
 
@@ -691,13 +1104,10 @@ def write_resource_sheet(
         except Exception as error:
 
             print(
-                f"WARNING: Could not process "
-                f"resource for Excel: {error}"
+                "WARNING: Could not "
+                "process resource for "
+                f"Excel: {error}"
             )
-
-    # --------------------------------------------------------
-    # No rows
-    # --------------------------------------------------------
 
     if not rows:
         return ws
@@ -706,9 +1116,9 @@ def write_resource_sheet(
         rows
     )
 
-    # --------------------------------------------------------
-    # Header
-    # --------------------------------------------------------
+    # ========================================================
+    # HEADER
+    # ========================================================
 
     for col_num, column in enumerate(
         columns,
@@ -731,9 +1141,9 @@ def write_resource_sheet(
             wrap_text=True,
         )
 
-    # --------------------------------------------------------
-    # Data
-    # --------------------------------------------------------
+    # ========================================================
+    # DATA
+    # ========================================================
 
     for row_num, row_data in enumerate(
         rows,
@@ -750,9 +1160,9 @@ def write_resource_sheet(
                 "",
             )
 
-            # =================================================
-            # IMPORTANT TIMEZONE FIX
-            # =================================================
+            # ------------------------------------------------
+            # FINAL VALUE CONVERSION
+            # ------------------------------------------------
 
             value = excel_safe_value(
                 value
@@ -761,8 +1171,9 @@ def write_resource_sheet(
             cell = ws.cell(
                 row=row_num,
                 column=col_num,
-                value=value,
             )
+
+            cell.value = value
 
             cell.alignment = Alignment(
                 vertical="top",
@@ -785,23 +1196,23 @@ def write_resource_sheet(
                     "yyyy-mm-dd hh:mm:ss"
                 )
 
-    # --------------------------------------------------------
-    # Freeze
-    # --------------------------------------------------------
+    # ========================================================
+    # FREEZE
+    # ========================================================
 
     ws.freeze_panes = "A2"
 
-    # --------------------------------------------------------
-    # Filter
-    # --------------------------------------------------------
+    # ========================================================
+    # FILTER
+    # ========================================================
 
     ws.auto_filter.ref = (
         ws.dimensions
     )
 
-    # --------------------------------------------------------
-    # Table
-    # --------------------------------------------------------
+    # ========================================================
+    # TABLE
+    # ========================================================
 
     if ws.max_row >= 2:
 
@@ -812,7 +1223,10 @@ def write_resource_sheet(
         )
 
         if not table_base:
-            table_base = "Resources"
+
+            table_base = (
+                "Resources"
+            )
 
         table_name = (
             "tbl_"
@@ -821,7 +1235,9 @@ def write_resource_sheet(
 
         existing_names = set()
 
-        for existing_ws in workbook.worksheets:
+        for existing_ws in (
+            workbook.worksheets
+        ):
 
             for existing_table in (
                 existing_ws.tables.keys()
@@ -831,11 +1247,15 @@ def write_resource_sheet(
                     existing_table
                 )
 
-        original_name = table_name
+        original_name = (
+            table_name
+        )
 
         counter = 2
 
-        while table_name in existing_names:
+        while table_name in (
+            existing_names
+        ):
 
             table_name = (
                 original_name
@@ -855,12 +1275,14 @@ def write_resource_sheet(
             ref=table_ref,
         )
 
-        table_style = TableStyleInfo(
-            name="TableStyleMedium2",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False,
+        table_style = (
+            TableStyleInfo(
+                name="TableStyleMedium2",
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=True,
+                showColumnStripes=False,
+            )
         )
 
         table.tableStyleInfo = (
@@ -871,28 +1293,34 @@ def write_resource_sheet(
             table
         )
 
-    # --------------------------------------------------------
-    # Column widths
-    # --------------------------------------------------------
+    # ========================================================
+    # COLUMN WIDTH
+    # ========================================================
 
     for col_num in range(
         1,
         ws.max_column + 1,
     ):
 
-        letter = get_column_letter(
-            col_num
+        letter = (
+            get_column_letter(
+                col_num
+            )
         )
 
         max_length = 0
 
-        for cell in ws[letter]:
+        for cell in ws[
+            letter
+        ]:
 
             if cell.value is None:
                 continue
 
             length = len(
-                str(cell.value)
+                str(
+                    cell.value
+                )
             )
 
             if length > max_length:
@@ -934,31 +1362,17 @@ def write_resource_sheet(
 # ============================================================
 
 def flatten_resources_by_service(
-    resources_by_service
+    resources_by_service,
 ):
-    """
-    Convert the existing main.py structure into one resource list.
-
-    Supports structures such as:
-
-        {
-            "Compute": [resource1, resource2]
-        }
-
-    and:
-
-        {
-            "Compute": {
-                "Instance": [resource1, resource2],
-                "Volume": [resource3]
-            }
-        }
-    """
 
     resources = []
 
     if resources_by_service is None:
         return resources
+
+    # --------------------------------------------------------
+    # Already a list
+    # --------------------------------------------------------
 
     if isinstance(
         resources_by_service,
@@ -969,12 +1383,22 @@ def flatten_resources_by_service(
             resources_by_service
         )
 
+    # --------------------------------------------------------
+    # Single object
+    # --------------------------------------------------------
+
     if not isinstance(
         resources_by_service,
         dict,
     ):
 
-        return [resources_by_service]
+        return [
+            resources_by_service
+        ]
+
+    # --------------------------------------------------------
+    # Dictionary
+    # --------------------------------------------------------
 
     for service_value in (
         resources_by_service.values()
@@ -983,10 +1407,7 @@ def flatten_resources_by_service(
         if service_value is None:
             continue
 
-        # ----------------------------------------------------
         # Service -> list
-        # ----------------------------------------------------
-
         if isinstance(
             service_value,
             list,
@@ -998,10 +1419,7 @@ def flatten_resources_by_service(
 
             continue
 
-        # ----------------------------------------------------
-        # Service -> dict
-        # ----------------------------------------------------
-
+        # Service -> dictionary
         if isinstance(
             service_value,
             dict,
@@ -1031,10 +1449,7 @@ def flatten_resources_by_service(
 
             continue
 
-        # ----------------------------------------------------
         # Single resource
-        # ----------------------------------------------------
-
         resources.append(
             service_value
         )
@@ -1047,7 +1462,7 @@ def flatten_resources_by_service(
 # ============================================================
 
 def group_resources(
-    resources
+    resources,
 ):
 
     grouped = {}
@@ -1059,14 +1474,22 @@ def group_resources(
         )
 
         service = (
-            data.get("service")
-            or data.get("service_name")
+            data.get(
+                "service"
+            )
+            or data.get(
+                "service_name"
+            )
             or "Other"
         )
 
         resource_type = (
-            data.get("resource_type")
-            or data.get("resourceType")
+            data.get(
+                "resource_type"
+            )
+            or data.get(
+                "resourceType"
+            )
             or "Resource"
         )
 
@@ -1086,7 +1509,7 @@ def group_resources(
 
 
 # ============================================================
-# SUMMARY
+# SUMMARY SHEET
 # ============================================================
 
 def create_summary_sheet(
@@ -1149,6 +1572,7 @@ def create_summary_sheet(
     # --------------------------------------------------------
 
     service_counts = {}
+
     resource_type_counts = {}
 
     for resource in resources:
@@ -1158,40 +1582,56 @@ def create_summary_sheet(
         )
 
         service = (
-            data.get("service")
-            or data.get("service_name")
+            data.get(
+                "service"
+            )
+            or data.get(
+                "service_name"
+            )
             or "Unknown"
         )
 
         resource_type = (
-            data.get("resource_type")
-            or data.get("resourceType")
+            data.get(
+                "resource_type"
+            )
+            or data.get(
+                "resourceType"
+            )
             or "Unknown"
         )
 
+        service = str(
+            service
+        )
+
+        resource_type = str(
+            resource_type
+        )
+
         service_counts[
-            str(service)
+            service
         ] = (
             service_counts.get(
-                str(service),
+                service,
                 0,
             )
             + 1
         )
 
         resource_type_counts[
-            str(resource_type)
+            resource_type
         ] = (
             resource_type_counts.get(
-                str(resource_type),
+                resource_type,
                 0,
             )
             + 1
         )
 
-    # --------------------------------------------------------
-    # Resource Type Summary
-    # --------------------------------------------------------
+    # ========================================================
+    # RESOURCE TYPE SUMMARY
+    # ========================================================
 
     ws["A7"] = (
         "Resource Type"
@@ -1231,9 +1671,9 @@ def create_summary_sheet(
 
         row += 1
 
-    # --------------------------------------------------------
-    # Service Summary
-    # --------------------------------------------------------
+    # ========================================================
+    # SERVICE SUMMARY
+    # ========================================================
 
     ws["D7"] = (
         "Service"
@@ -1313,28 +1753,23 @@ def create_inventory_workbook(
     **kwargs,
 ):
     """
-    Main workbook creation function.
+    Create the complete OCI inventory workbook.
 
-    IMPORTANT:
-    Supports the existing main.py call:
+    Compatible with the existing main.py interface:
 
         create_inventory_workbook(
             resources_by_service=...
         )
 
-    It also supports:
+    Also supports:
 
         create_inventory_workbook(
             resources=...
         )
-
-    Additional keyword arguments are accepted through **kwargs
-    so the workbook does not fail if main.py passes an existing
-    optional parameter.
     """
 
     # ========================================================
-    # HANDLE EXISTING resources_by_service ARGUMENT
+    # GET RESOURCE LIST
     # ========================================================
 
     if resources_by_service is not None:
@@ -1356,17 +1791,24 @@ def create_inventory_workbook(
         )
 
     # ========================================================
-    # OUTPUT FILE COMPATIBILITY
+    # OUTPUT FILE
     # ========================================================
 
     if output_file is None:
 
-        # Support common existing names if main.py supplies them
         output_file = (
-            kwargs.get("output_path")
-            or kwargs.get("filename")
-            or kwargs.get("file_path")
-            or kwargs.get("report_file")
+            kwargs.get(
+                "output_path"
+            )
+            or kwargs.get(
+                "filename"
+            )
+            or kwargs.get(
+                "file_path"
+            )
+            or kwargs.get(
+                "report_file"
+            )
         )
 
     # ========================================================
@@ -1375,7 +1817,9 @@ def create_inventory_workbook(
 
     workbook = Workbook()
 
-    default_sheet = workbook.active
+    default_sheet = (
+        workbook.active
+    )
 
     workbook.remove(
         default_sheet
@@ -1399,7 +1843,7 @@ def create_inventory_workbook(
     )
 
     # ========================================================
-    # RESOURCE SHEETS
+    # CREATE RESOURCE SHEETS
     # ========================================================
 
     for (
@@ -1413,20 +1857,9 @@ def create_inventory_workbook(
         ),
     ):
 
-        # ----------------------------------------------------
-        # Use resource type for sheet name.
-        #
-        # If same resource type occurs under different
-        # services, unique_sheet_name() will add _2, _3...
-        # ----------------------------------------------------
-
-        sheet_name = (
-            resource_type
-        )
-
         write_resource_sheet(
             workbook,
-            sheet_name,
+            resource_type,
             resource_list,
         )
 
@@ -1434,13 +1867,19 @@ def create_inventory_workbook(
     # FINAL EXCEL SAFETY PASS
     # ========================================================
 
-    # This is an additional protection against any timezone
-    # aware datetime hidden inside tags/details.
+    # IMPORTANT:
     #
-    # This directly prevents:
+    # Every value is passed through excel_safe_value().
     #
-    # TypeError:
-    # Excel does not support timezones in datetimes.
+    # This prevents:
+    #
+    #   timezone-aware datetime errors
+    #
+    # and:
+    #
+    #   Cannot convert {...} to Excel
+    #
+    # errors.
     # ========================================================
 
     for ws in workbook.worksheets:
@@ -1449,21 +1888,7 @@ def create_inventory_workbook(
 
             for cell in row:
 
-                if isinstance(
-                    cell.value,
-                    datetime,
-                ):
-
-                    cell.value = (
-                        excel_safe_value(
-                            cell.value
-                        )
-                    )
-
-                elif isinstance(
-                    cell.value,
-                    time,
-                ):
+                if cell.value is not None:
 
                     cell.value = (
                         excel_safe_value(
@@ -1491,7 +1916,7 @@ def create_inventory_workbook(
         )
 
         print(
-            f"Inventory workbook created: "
+            "Inventory workbook created: "
             f"{output_path}"
         )
 
@@ -1508,9 +1933,6 @@ def create_workbook(
     output_file=None,
     **kwargs,
 ):
-    """
-    Backward-compatible wrapper.
-    """
 
     return create_inventory_workbook(
         resources=resources,
