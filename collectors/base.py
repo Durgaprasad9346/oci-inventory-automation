@@ -17,3 +17,9 @@ class Resource:
     region: str
     state: str = ""
     details: Optional[Dict[str, Any]] = None
+
+    # Resource creation timestamp
+    time_created: Optional[Any] = None
+
+    # OCI Defined Tags
+    defined_tags: Optional[Dict[str, Any]] = None
