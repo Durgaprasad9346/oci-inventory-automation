@@ -7,8 +7,15 @@ from utils.regions import get_regions
 
 def collect_load_balancer(config):
     """
-    Collect all OCI Load Balancers across all subscribed
-    regions and accessible compartments.
+    Collect all OCI Load Balancers across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing Load Balancer details
     """
 
     compartments = get_compartments(config)
@@ -18,7 +25,9 @@ def collect_load_balancer(config):
 
     for region in regions:
 
-        print(f"  Processing Load Balancer region: {region}")
+        print(
+            f"  Processing Load Balancer region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -30,6 +39,7 @@ def collect_load_balancer(config):
         for compartment in compartments:
 
             try:
+
                 load_balancers = (
                     oci.pagination.list_call_get_all_results(
                         load_balancer_client.list_load_balancers,
@@ -38,23 +48,6 @@ def collect_load_balancer(config):
                 )
 
                 for load_balancer in load_balancers.data:
-
-                    ip_addresses = []
-
-                    for ip_address in (
-                        getattr(
-                            load_balancer,
-                            "ip_addresses",
-                            []
-                        ) or []
-                    ):
-                        ip_addresses.append(
-                            getattr(
-                                ip_address,
-                                "ip_address",
-                                ""
-                            )
-                        )
 
                     resources.append(
                         Resource(
@@ -70,10 +63,45 @@ def collect_load_balancer(config):
                                 "lifecycle_state",
                                 "",
                             ),
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
+                                load_balancer,
+                                "time_created",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
+                                load_balancer,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # Existing Load Balancer details
+                            # -----------------------------------------
+
                             details={
+                                "ip_addresses": getattr(
+                                    load_balancer,
+                                    "ip_addresses",
+                                    "",
+                                ),
                                 "shape_name": getattr(
                                     load_balancer,
                                     "shape_name",
+                                    "",
+                                ),
+                                "shape_details": getattr(
+                                    load_balancer,
+                                    "shape_details",
                                     "",
                                 ),
                                 "is_private": getattr(
@@ -81,30 +109,29 @@ def collect_load_balancer(config):
                                     "is_private",
                                     "",
                                 ),
-                                "ip_addresses": ip_addresses,
                                 "subnet_ids": getattr(
                                     load_balancer,
                                     "subnet_ids",
-                                    [],
-                                ),
-                                "vcn_id": getattr(
-                                    load_balancer,
-                                    "vcn_id",
                                     "",
                                 ),
-                                "bandwidth_shape_name": getattr(
+                                "network_security_group_ids": getattr(
                                     load_balancer,
-                                    "bandwidth_shape_name",
+                                    "network_security_group_ids",
                                     "",
                                 ),
-                                "shape_details": getattr(
+                                "backend_sets": getattr(
                                     load_balancer,
-                                    "shape_details",
-                                    None,
+                                    "backend_sets",
+                                    "",
                                 ),
-                                "time_created": getattr(
+                                "listeners": getattr(
                                     load_balancer,
-                                    "time_created",
+                                    "listeners",
+                                    "",
+                                ),
+                                "rule_sets": getattr(
+                                    load_balancer,
+                                    "rule_sets",
                                     "",
                                 ),
                             },
@@ -114,7 +141,8 @@ def collect_load_balancer(config):
             except Exception as error:
 
                 print(
-                    f"    ERROR in compartment "
+                    f"    ERROR collecting Load Balancer "
+                    f"from compartment "
                     f"{compartment['name']}: {error}"
                 )
 
