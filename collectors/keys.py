@@ -5,21 +5,20 @@ from utils.compartments import get_compartments
 from utils.regions import get_regions
 
 
-def collect_keys(config):
+def collect_key_management(config):
     """
-    Collect OCI KMS keys across:
-        - All subscribed regions
-        - All accessible compartments
-        - All accessible vaults
-
-    Keys are listed through each vault's
-    management endpoint.
+    Collect OCI Key Management resources.
 
     Collects:
-        - Resource information
+        - Master Encryption Keys
         - Creation date
         - OCI Defined Tags
-        - Existing Key details
+        - Vault information
+        - Key details
+
+    Vaults are discovered using KmsVaultClient.
+    Keys are discovered using KmsManagementClient with the
+    vault's management endpoint.
     """
 
     compartments = get_compartments(config)
@@ -36,11 +35,11 @@ def collect_keys(config):
         region_config = config.copy()
         region_config["region"] = region
 
-        # -----------------------------------------------------
-        # Vault client
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # KMS Vault client
+        # ---------------------------------------------------------
 
-        vault_client = oci.vault.VaultsClient(
+        kms_vault_client = oci.key_management.KmsVaultClient(
             region_config
         )
 
@@ -50,7 +49,7 @@ def collect_keys(config):
 
                 vaults = (
                     oci.pagination.list_call_get_all_results(
-                        vault_client.list_vaults,
+                        kms_vault_client.list_vaults,
                         compartment_id=compartment["id"],
                     )
                 )
@@ -59,15 +58,10 @@ def collect_keys(config):
 
                 print(
                     f"    ERROR collecting vaults from "
-                    f"compartment "
-                    f"{compartment['name']}: {error}"
+                    f"compartment {compartment['name']}: {error}"
                 )
 
                 continue
-
-            # -------------------------------------------------
-            # Process every vault
-            # -------------------------------------------------
 
             for vault in vaults.data:
 
@@ -83,43 +77,62 @@ def collect_keys(config):
                     "",
                 )
 
-                management_endpoint = getattr(
-                    vault,
-                    "management_endpoint",
-                    None,
-                )
-
                 if not vault_id:
-                    continue
-
-                if not management_endpoint:
-
-                    print(
-                        f"    WARNING: Vault "
-                        f"{vault_name} does not have "
-                        f"a management endpoint. "
-                        f"Skipping keys."
-                    )
-
                     continue
 
                 try:
 
                     # -------------------------------------------------
-                    # Create KMS Management client using the
-                    # vault-specific management endpoint.
+                    # Get vault details.
+                    #
+                    # The Vault object exposes the management endpoint
+                    # required by KmsManagementClient.
                     # -------------------------------------------------
 
-                    kms_client = (
+                    vault_response = (
+                        kms_vault_client.get_vault(
+                            vault_id=vault_id
+                        )
+                    )
+
+                    vault_details = vault_response.data
+
+                    management_endpoint = getattr(
+                        vault_details,
+                        "management_endpoint",
+                        "",
+                    )
+
+                    if not management_endpoint:
+
+                        print(
+                            f"    ERROR collecting keys from vault "
+                            f"{vault_name}: management endpoint "
+                            f"not available"
+                        )
+
+                        continue
+
+                    # -------------------------------------------------
+                    # Key management client
+                    # -------------------------------------------------
+
+                    kms_management_client = (
                         oci.key_management.KmsManagementClient(
                             region_config,
                             service_endpoint=management_endpoint,
                         )
                     )
 
+                    # -------------------------------------------------
+                    # list_keys uses compartment_id.
+                    # The vault is identified by the management
+                    # endpoint, not by a vault_id kwarg.
+                    # -------------------------------------------------
+
                     keys = (
                         oci.pagination.list_call_get_all_results(
-                            kms_client.list_keys,
+                            kms_management_client.list_keys,
                             compartment_id=compartment["id"],
                         )
                     )
@@ -149,9 +162,9 @@ def collect_keys(config):
                                     "",
                                 ),
 
-                                # -------------------------------------
+                                # -----------------------------------------
                                 # Creation Date
-                                # -------------------------------------
+                                # -----------------------------------------
 
                                 time_created=getattr(
                                     key,
@@ -159,9 +172,9 @@ def collect_keys(config):
                                     None,
                                 ),
 
-                                # -------------------------------------
+                                # -----------------------------------------
                                 # OCI Defined Tags
-                                # -------------------------------------
+                                # -----------------------------------------
 
                                 defined_tags=getattr(
                                     key,
@@ -169,9 +182,9 @@ def collect_keys(config):
                                     None,
                                 ),
 
-                                # -------------------------------------
-                                # Existing Key details
-                                # -------------------------------------
+                                # -----------------------------------------
+                                # Key details
+                                # -----------------------------------------
 
                                 details={
                                     "vault_id": vault_id,
@@ -202,6 +215,15 @@ def collect_keys(config):
                                         "length",
                                         "",
                                     ),
+                                    "curve_id": getattr(
+                                        getattr(
+                                            key,
+                                            "key_shape",
+                                            None,
+                                        ),
+                                        "curve_id",
+                                        "",
+                                    ),
                                     "protection_mode": getattr(
                                         key,
                                         "protection_mode",
@@ -219,8 +241,7 @@ def collect_keys(config):
                 except Exception as error:
 
                     print(
-                        f"    ERROR collecting keys "
-                        f"from vault "
+                        f"    ERROR collecting keys from vault "
                         f"{vault_name}: {error}"
                     )
 
