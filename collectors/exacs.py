@@ -7,8 +7,17 @@ from utils.regions import get_regions
 
 def collect_exacs(config):
     """
-    Collect OCI Exadata Cloud Service VM Clusters
-    across all subscribed regions and accessible compartments.
+    Collect OCI Exadata Cloud Service VM Clusters across:
+        - All subscribed regions
+        - All accessible compartments
+
+    ExaCS is represented here at the VM Cluster level.
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing VM Cluster details
     """
 
     compartments = get_compartments(config)
@@ -18,7 +27,9 @@ def collect_exacs(config):
 
     for region in regions:
 
-        print(f"  Processing ExaCS region: {region}")
+        print(
+            f"  Processing ExaCS region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -54,7 +65,37 @@ def collect_exacs(config):
                                 "lifecycle_state",
                                 "",
                             ),
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
+                                vm_cluster,
+                                "time_created",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
+                                vm_cluster,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # Existing VM Cluster details
+                            # -----------------------------------------
+
                             details={
+                                "availability_domain": getattr(
+                                    vm_cluster,
+                                    "availability_domain",
+                                    "",
+                                ),
                                 "shape": getattr(
                                     vm_cluster,
                                     "shape",
@@ -75,19 +116,19 @@ def collect_exacs(config):
                                     "db_node_storage_size_in_gbs",
                                     "",
                                 ),
-                                "exadata_infrastructure_id": getattr(
+                                "cloud_exadata_infrastructure_id": getattr(
                                     vm_cluster,
                                     "cloud_exadata_infrastructure_id",
+                                    "",
+                                ),
+                                "cloud_exadata_infrastructure_name": getattr(
+                                    vm_cluster,
+                                    "cloud_exadata_infrastructure_name",
                                     "",
                                 ),
                                 "vm_cluster_type": getattr(
                                     vm_cluster,
                                     "vm_cluster_type",
-                                    "",
-                                ),
-                                "time_created": getattr(
-                                    vm_cluster,
-                                    "time_created",
                                     "",
                                 ),
                             },
@@ -97,7 +138,7 @@ def collect_exacs(config):
             except Exception as error:
 
                 print(
-                    f"    ERROR collecting ExaCS VM clusters "
+                    f"    ERROR collecting ExaCS VM Clusters "
                     f"from compartment "
                     f"{compartment['name']}: {error}"
                 )
