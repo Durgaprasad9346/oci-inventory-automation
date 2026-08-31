@@ -25,7 +25,7 @@ def create_inventory_workbook(
         - Creation Date, when available
         - Dynamic OCI Defined Tag columns
 
-    The 'schedule' tag is intentionally excluded.
+    The complete 'Schedule' namespace is excluded.
     """
 
     workbook = Workbook()
@@ -316,14 +316,6 @@ def _prepare_excel_datetime(
     """
     Convert OCI timezone-aware datetime into
     an Excel-compatible datetime.
-
-    OCI commonly returns:
-
-        2026-08-20 10:35:22+00:00
-
-    Excel does not support timezone-aware
-    datetime objects, so timezone information
-    is removed while preserving date and time.
     """
 
     if isinstance(
@@ -349,16 +341,23 @@ def _get_tag_columns(
     Find every unique OCI Defined Tag across
     all resources in a service.
 
-    The 'schedule' tag is excluded.
+    The complete 'Schedule' namespace is excluded.
 
-    Example:
+    Example included tags:
 
         maxlife:env
+        maxlife:fy
         maxlife:project
         maxlife:subenv
         maxlife:subproject
-        maxlife:fy
         Oracle-Tags:CreatedBy
+        Oracle-Tags:CreatedOn
+
+    Example excluded tags:
+
+        Schedule:Saturday
+        Schedule:Sunday
+        Schedule:WeekDay
     """
 
     tag_columns = set()
@@ -373,6 +372,13 @@ def _get_tag_columns(
 
         for namespace, tags in defined_tags.items():
 
+            # -------------------------------------------------
+            # Exclude entire Schedule namespace
+            # -------------------------------------------------
+
+            if str(namespace).strip().lower() == "schedule":
+                continue
+
             if not isinstance(
                 tags,
                 dict,
@@ -380,13 +386,6 @@ def _get_tag_columns(
                 continue
 
             for tag_key in tags.keys():
-
-                # -------------------------------------------------
-                # Exclude schedule tag
-                # -------------------------------------------------
-
-                if str(tag_key).strip().lower() == "schedule":
-                    continue
 
                 tag_columns.add(
                     f"{namespace}:{tag_key}"
@@ -421,9 +420,11 @@ def _get_tag_value(
         )
     )
 
-    # Safety check in case schedule is passed
-    # from another part of the program.
-    if tag_key.strip().lower() == "schedule":
+    # ---------------------------------------------------------
+    # Never return values from Schedule namespace
+    # ---------------------------------------------------------
+
+    if str(namespace).strip().lower() == "schedule":
 
         return ""
 
