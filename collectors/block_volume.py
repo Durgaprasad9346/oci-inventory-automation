@@ -11,6 +11,11 @@ def collect_block_volume(config):
     Collect all OCI Block Volumes across
     all subscribed regions, availability domains,
     and accessible compartments.
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
     """
 
     compartments = get_compartments(config)
@@ -20,7 +25,9 @@ def collect_block_volume(config):
 
     for region in regions:
 
-        print(f"  Processing Block Volume region: {region}")
+        print(
+            f"  Processing Block Volume region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -38,36 +45,82 @@ def collect_block_volume(config):
 
             for compartment in compartments:
 
-                volumes = oci.pagination.list_call_get_all_results(
-                    blockstorage_client.list_volumes,
-                    availability_domain=availability_domain,
-                    compartment_id=compartment["id"],
-                )
+                try:
 
-                for volume in volumes.data:
-
-                    resources.append(
-                        Resource(
-                            service="Block Volume",
-                            resource_type="Block Volume",
-                            name=volume.display_name,
-                            ocid=volume.id,
+                    volumes = (
+                        oci.pagination.list_call_get_all_results(
+                            blockstorage_client.list_volumes,
+                            availability_domain=availability_domain,
                             compartment_id=compartment["id"],
-                            compartment_name=compartment["name"],
-                            region=region,
-                            state=volume.lifecycle_state,
-                            details={
-                                "availability_domain": (
-                                    volume.availability_domain
-                                ),
-                                "size_in_gbs": (
-                                    volume.size_in_gbs
-                                ),
-                                "vpus_per_gb": (
-                                    volume.vpus_per_gb
-                                ),
-                            },
                         )
+                    )
+
+                    for volume in volumes.data:
+
+                        resources.append(
+                            Resource(
+                                service="Block Volume",
+                                resource_type="Block Volume",
+                                name=volume.display_name,
+                                ocid=volume.id,
+                                compartment_id=compartment["id"],
+                                compartment_name=compartment["name"],
+                                region=region,
+                                state=getattr(
+                                    volume,
+                                    "lifecycle_state",
+                                    "",
+                                ),
+
+                                # -------------------------------------------------
+                                # Creation Date
+                                # -------------------------------------------------
+
+                                time_created=getattr(
+                                    volume,
+                                    "time_created",
+                                    None,
+                                ),
+
+                                # -------------------------------------------------
+                                # OCI Defined Tags
+                                # -------------------------------------------------
+
+                                defined_tags=getattr(
+                                    volume,
+                                    "defined_tags",
+                                    None,
+                                ),
+
+                                # -------------------------------------------------
+                                # Existing resource details
+                                # -------------------------------------------------
+
+                                details={
+                                    "availability_domain": getattr(
+                                        volume,
+                                        "availability_domain",
+                                        "",
+                                    ),
+                                    "size_in_gbs": getattr(
+                                        volume,
+                                        "size_in_gbs",
+                                        "",
+                                    ),
+                                    "vpus_per_gb": getattr(
+                                        volume,
+                                        "vpus_per_gb",
+                                        "",
+                                    ),
+                                },
+                            )
+                        )
+
+                except Exception as error:
+
+                    print(
+                        f"    ERROR in compartment "
+                        f"{compartment['name']}: {error}"
                     )
 
     return resources
