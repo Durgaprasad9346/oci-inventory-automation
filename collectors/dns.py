@@ -7,8 +7,17 @@ from utils.regions import get_regions
 
 def collect_dns(config):
     """
-    Collect OCI DNS zones across all subscribed regions
-    and accessible compartments.
+    Collect OCI DNS resources across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects DNS Zones.
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing DNS details
     """
 
     compartments = get_compartments(config)
@@ -18,7 +27,9 @@ def collect_dns(config):
 
     for region in regions:
 
-        print(f"  Processing DNS region: {region}")
+        print(
+            f"  Processing DNS region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -29,40 +40,90 @@ def collect_dns(config):
 
         for compartment in compartments:
 
-            zones = oci.pagination.list_call_get_all_results(
-                dns_client.list_zones,
-                compartment_id=compartment["id"],
-            )
+            try:
 
-            for zone in zones.data:
-
-                resources.append(
-                    Resource(
-                        service="DNS",
-                        resource_type="DNS Zone",
-                        name=zone.name,
-                        ocid=zone.id,
+                zones = (
+                    oci.pagination.list_call_get_all_results(
+                        dns_client.list_zones,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=getattr(
-                            zone,
-                            "lifecycle_state",
-                            "",
-                        ),
-                        details={
-                            "zone_type": getattr(
-                                zone,
-                                "zone_type",
-                                "",
-                            ),
-                            "serial": getattr(
-                                zone,
-                                "serial",
-                                "",
-                            ),
-                        },
                     )
+                )
+
+                for zone in zones.data:
+
+                    resources.append(
+                        Resource(
+                            service="DNS",
+                            resource_type="DNS Zone",
+                            name=getattr(
+                                zone,
+                                "name",
+                                "",
+                            ),
+                            ocid=getattr(
+                                zone,
+                                "id",
+                                "",
+                            ),
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
+                                zone,
+                                "lifecycle_state",
+                                "",
+                            ),
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
+                                zone,
+                                "time_created",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
+                                zone,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # Existing DNS details
+                            # -----------------------------------------
+
+                            details={
+                                "zone_type": getattr(
+                                    zone,
+                                    "zone_type",
+                                    "",
+                                ),
+                                "serial": getattr(
+                                    zone,
+                                    "serial",
+                                    "",
+                                ),
+                                "nameservers": getattr(
+                                    zone,
+                                    "nameservers",
+                                    "",
+                                ),
+                            },
+                        )
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting DNS "
+                    f"from compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
