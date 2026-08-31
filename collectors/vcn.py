@@ -7,8 +7,15 @@ from utils.regions import get_regions
 
 def collect_vcn(config):
     """
-    Collect OCI VCN resources across all subscribed regions
-    and accessible compartments.
+    Collect all OCI VCNs across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing VCN details
     """
 
     compartments = get_compartments(config)
@@ -18,7 +25,9 @@ def collect_vcn(config):
 
     for region in regions:
 
-        print(f"  Processing VCN region: {region}")
+        print(
+            f"  Processing VCN region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
@@ -30,9 +39,12 @@ def collect_vcn(config):
         for compartment in compartments:
 
             try:
-                vcns = oci.pagination.list_call_get_all_results(
-                    virtual_network_client.list_vcns,
-                    compartment_id=compartment["id"],
+
+                vcns = (
+                    oci.pagination.list_call_get_all_results(
+                        virtual_network_client.list_vcns,
+                        compartment_id=compartment["id"],
+                    )
                 )
 
                 for vcn in vcns.data:
@@ -51,6 +63,31 @@ def collect_vcn(config):
                                 "lifecycle_state",
                                 "",
                             ),
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
+                                vcn,
+                                "time_created",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
+                                vcn,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # Existing VCN details
+                            # -----------------------------------------
+
                             details={
                                 "cidr_block": getattr(
                                     vcn,
@@ -60,21 +97,11 @@ def collect_vcn(config):
                                 "cidr_blocks": getattr(
                                     vcn,
                                     "cidr_blocks",
-                                    [],
+                                    "",
                                 ),
                                 "ipv6_cidr_blocks": getattr(
                                     vcn,
                                     "ipv6_cidr_blocks",
-                                    [],
-                                ),
-                                "is_ipv6_enabled": getattr(
-                                    vcn,
-                                    "is_ipv6_enabled",
-                                    False,
-                                ),
-                                "dns_label": getattr(
-                                    vcn,
-                                    "vcn_domain_name",
                                     "",
                                 ),
                                 "default_dhcp_options_id": getattr(
@@ -92,9 +119,9 @@ def collect_vcn(config):
                                     "default_security_list_id",
                                     "",
                                 ),
-                                "time_created": getattr(
+                                "dns_label": getattr(
                                     vcn,
-                                    "time_created",
+                                    "dns_label",
                                     "",
                                 ),
                             },
@@ -104,7 +131,8 @@ def collect_vcn(config):
             except Exception as error:
 
                 print(
-                    f"    ERROR in compartment "
+                    f"    ERROR collecting VCN "
+                    f"from compartment "
                     f"{compartment['name']}: {error}"
                 )
 
