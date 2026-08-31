@@ -7,15 +7,18 @@ from utils.regions import get_regions
 
 def collect_logging(config):
     """
-    Collect all OCI Logging resources across:
+    Collect OCI Logging resources across:
         - All subscribed regions
         - All accessible compartments
+        - All log groups
+        - All logs
 
     Collects:
-        - Resource information
+        - Log Group information
+        - Log information
         - Creation date
         - OCI Defined Tags
-        - Existing Logging details
+        - Resource-specific details
     """
 
     compartments = get_compartments(config)
@@ -38,15 +41,110 @@ def collect_logging(config):
 
         for compartment in compartments:
 
+            # =========================================================
+            # LOG GROUPS
+            # =========================================================
+
             try:
 
-                logs = (
+                log_groups = (
                     oci.pagination.list_call_get_all_results(
-                        logging_client.list_logs,
-                        log_group_id=None,
+                        logging_client.list_log_groups,
                         compartment_id=compartment["id"],
                     )
                 )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting Log Groups from "
+                    f"compartment {compartment['name']}: {error}"
+                )
+
+                continue
+
+            for log_group in log_groups.data:
+
+                log_group_id = getattr(
+                    log_group,
+                    "id",
+                    "",
+                )
+
+                log_group_name = getattr(
+                    log_group,
+                    "display_name",
+                    "",
+                )
+
+                # -----------------------------------------------------
+                # Add Log Group itself
+                # -----------------------------------------------------
+
+                resources.append(
+                    Resource(
+                        service="Logging",
+                        resource_type="Log Group",
+                        name=log_group_name,
+                        ocid=log_group_id,
+                        compartment_id=compartment["id"],
+                        compartment_name=compartment["name"],
+                        region=region,
+                        state=getattr(
+                            log_group,
+                            "lifecycle_state",
+                            "",
+                        ),
+
+                        # Creation Date
+                        time_created=getattr(
+                            log_group,
+                            "time_created",
+                            None,
+                        ),
+
+                        # Defined Tags
+                        defined_tags=getattr(
+                            log_group,
+                            "defined_tags",
+                            None,
+                        ),
+
+                        details={
+                            "description": getattr(
+                                log_group,
+                                "description",
+                                "",
+                            ),
+                            "log_group_id": log_group_id,
+                        },
+                    )
+                )
+
+                if not log_group_id:
+                    continue
+
+                # =====================================================
+                # LOGS INSIDE LOG GROUP
+                # =====================================================
+
+                try:
+
+                    logs = (
+                        oci.pagination.list_call_get_all_results(
+                            logging_client.list_logs,
+                            log_group_id=log_group_id,
+                        )
+                    )
+
+                except Exception as error:
+
+                    print(
+                        f"    ERROR collecting Logs from "
+                        f"Log Group {log_group_name}: {error}"
+                    )
+
+                    continue
 
                 for log in logs.data:
 
@@ -73,36 +171,23 @@ def collect_logging(config):
                                 "",
                             ),
 
-                            # -----------------------------------------
                             # Creation Date
-                            # -----------------------------------------
-
                             time_created=getattr(
                                 log,
                                 "time_created",
                                 None,
                             ),
 
-                            # -----------------------------------------
-                            # OCI Defined Tags
-                            # -----------------------------------------
-
+                            # Defined Tags
                             defined_tags=getattr(
                                 log,
                                 "defined_tags",
                                 None,
                             ),
 
-                            # -----------------------------------------
-                            # Existing Logging details
-                            # -----------------------------------------
-
                             details={
-                                "log_group_id": getattr(
-                                    log,
-                                    "log_group_id",
-                                    "",
-                                ),
+                                "log_group_id": log_group_id,
+                                "log_group_name": log_group_name,
                                 "log_type": getattr(
                                     log,
                                     "log_type",
@@ -113,26 +198,23 @@ def collect_logging(config):
                                     "source",
                                     "",
                                 ),
-                                "retention_duration": getattr(
-                                    log,
-                                    "retention_duration",
-                                    "",
-                                ),
                                 "is_enabled": getattr(
                                     log,
                                     "is_enabled",
                                     "",
                                 ),
+                                "retention_duration": getattr(
+                                    log,
+                                    "retention_duration",
+                                    "",
+                                ),
+                                "service": getattr(
+                                    log,
+                                    "service",
+                                    "",
+                                ),
                             },
                         )
                     )
-
-            except Exception as error:
-
-                print(
-                    f"    ERROR collecting Logging "
-                    f"from compartment "
-                    f"{compartment['name']}: {error}"
-                )
 
     return resources
