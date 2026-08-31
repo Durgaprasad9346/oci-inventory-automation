@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, List, Any
+from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
@@ -16,16 +17,13 @@ def create_inventory_workbook(
     Create the OCI inventory Excel workbook.
 
     Creates:
-
         1. Summary sheet
         2. One detailed sheet per service
 
-    For services containing resource creation dates,
-    a Creation Date column is added.
-
-    For services containing OCI Defined Tags,
-    one separate column is created for every
-    Namespace + Tag Key combination.
+    Detailed sheets include:
+        - Standard resource information
+        - Creation Date, when available
+        - Dynamic OCI Defined Tag columns
     """
 
     workbook = Workbook()
@@ -86,11 +84,15 @@ def create_inventory_workbook(
         ]
 
         # -----------------------------------------------------
-        # Creation Date
+        # Check whether service has creation dates
         # -----------------------------------------------------
 
         has_creation_date = any(
-            resource.time_created is not None
+            getattr(
+                resource,
+                "time_created",
+                None,
+            ) is not None
             for resource in resources
         )
 
@@ -101,7 +103,7 @@ def create_inventory_workbook(
             )
 
         # -----------------------------------------------------
-        # Dynamic Defined Tags
+        # Find all dynamic tag columns
         # -----------------------------------------------------
 
         tag_columns = _get_tag_columns(
@@ -125,7 +127,7 @@ def create_inventory_workbook(
         )
 
         # -----------------------------------------------------
-        # Add resource rows
+        # Add resources
         # -----------------------------------------------------
 
         for index, resource in enumerate(
@@ -150,18 +152,36 @@ def create_inventory_workbook(
 
             if has_creation_date:
 
+                creation_date = getattr(
+                    resource,
+                    "time_created",
+                    None,
+                )
+
+                creation_date = (
+                    _prepare_excel_datetime(
+                        creation_date
+                    )
+                )
+
                 row.append(
-                    resource.time_created
+                    creation_date
                 )
 
             # -------------------------------------------------
             # Defined Tags
             # -------------------------------------------------
 
+            defined_tags = getattr(
+                resource,
+                "defined_tags",
+                None,
+            )
+
             for tag_column in tag_columns:
 
                 tag_value = _get_tag_value(
-                    resource.defined_tags,
+                    defined_tags,
                     tag_column,
                 )
 
@@ -174,14 +194,12 @@ def create_inventory_workbook(
             )
 
         # -----------------------------------------------------
-        # Format Creation Date column
+        # Format Creation Date
         # -----------------------------------------------------
 
         if has_creation_date:
 
-            creation_date_column = (
-                9
-            )
+            creation_date_column = 9
 
             for row_number in range(
                 2,
@@ -193,7 +211,10 @@ def create_inventory_workbook(
                     column=creation_date_column,
                 )
 
-                if cell.value is not None:
+                if isinstance(
+                    cell.value,
+                    datetime,
+                ):
 
                     cell.number_format = (
                         "dd-mmm-yyyy hh:mm:ss"
@@ -287,6 +308,38 @@ def create_inventory_workbook(
     )
 
 
+def _prepare_excel_datetime(
+    value: Any,
+) -> Any:
+    """
+    Convert OCI timezone-aware datetime into
+    an Excel-compatible datetime.
+
+    OCI commonly returns values such as:
+
+        2026-08-20 10:35:22+00:00
+
+    Excel does not support timezone-aware datetime
+    objects, so the timezone information is removed
+    while preserving the date and time.
+    """
+
+    if isinstance(
+        value,
+        datetime,
+    ):
+
+        if value.tzinfo is not None:
+
+            return value.replace(
+                tzinfo=None
+            )
+
+        return value
+
+    return value
+
+
 def _get_tag_columns(
     resources: List[Resource],
 ) -> List[str]:
@@ -299,6 +352,8 @@ def _get_tag_columns(
         maxlife:env
         maxlife:project
         maxlife:subenv
+        maxlife:subproject
+        maxlife:fy
         Oracle-Tags:CreatedBy
     """
 
@@ -306,10 +361,11 @@ def _get_tag_columns(
 
     for resource in resources:
 
-        defined_tags = (
-            resource.defined_tags
-            or {}
-        )
+        defined_tags = getattr(
+            resource,
+            "defined_tags",
+            None,
+        ) or {}
 
         for namespace, tags in defined_tags.items():
 
@@ -340,9 +396,11 @@ def _get_tag_value(
     """
 
     if not defined_tags:
+
         return ""
 
     if ":" not in tag_column:
+
         return ""
 
     namespace, tag_key = (
@@ -361,6 +419,7 @@ def _get_tag_value(
         namespace_tags,
         dict,
     ):
+
         return ""
 
     value = namespace_tags.get(
@@ -368,10 +427,21 @@ def _get_tag_value(
         "",
     )
 
+    # Excel cells should not receive
+    # complex dictionary/list objects.
+    if isinstance(
+        value,
+        (dict, list),
+    ):
+
+        return str(value)
+
     return value
 
 
-def _format_header(sheet) -> None:
+def _format_header(
+    sheet,
+) -> None:
     """Format worksheet header."""
 
     for cell in sheet[1]:
@@ -386,7 +456,9 @@ def _format_header(sheet) -> None:
         )
 
 
-def _format_sheet(sheet) -> None:
+def _format_sheet(
+    sheet,
+) -> None:
     """Apply common worksheet formatting."""
 
     for row in sheet.iter_rows():
@@ -406,10 +478,8 @@ def _format_sheet(sheet) -> None:
 
         max_length = 0
 
-        column_letter = (
-            get_column_letter(
-                column_cells[0].column
-            )
+        column_letter = get_column_letter(
+            column_cells[0].column
         )
 
         for cell in column_cells:
