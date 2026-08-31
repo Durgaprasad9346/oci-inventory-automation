@@ -24,6 +24,8 @@ def create_inventory_workbook(
         - Standard resource information
         - Creation Date, when available
         - Dynamic OCI Defined Tag columns
+
+    The 'schedule' tag is intentionally excluded.
     """
 
     workbook = Workbook()
@@ -84,7 +86,7 @@ def create_inventory_workbook(
         ]
 
         # -----------------------------------------------------
-        # Check whether service has creation dates
+        # Creation Date
         # -----------------------------------------------------
 
         has_creation_date = any(
@@ -103,7 +105,7 @@ def create_inventory_workbook(
             )
 
         # -----------------------------------------------------
-        # Find all dynamic tag columns
+        # Dynamic Defined Tags
         # -----------------------------------------------------
 
         tag_columns = _get_tag_columns(
@@ -127,7 +129,7 @@ def create_inventory_workbook(
         )
 
         # -----------------------------------------------------
-        # Add resources
+        # Add resource rows
         # -----------------------------------------------------
 
         for index, resource in enumerate(
@@ -194,7 +196,7 @@ def create_inventory_workbook(
             )
 
         # -----------------------------------------------------
-        # Format Creation Date
+        # Format Creation Date column
         # -----------------------------------------------------
 
         if has_creation_date:
@@ -315,13 +317,13 @@ def _prepare_excel_datetime(
     Convert OCI timezone-aware datetime into
     an Excel-compatible datetime.
 
-    OCI commonly returns values such as:
+    OCI commonly returns:
 
         2026-08-20 10:35:22+00:00
 
-    Excel does not support timezone-aware datetime
-    objects, so the timezone information is removed
-    while preserving the date and time.
+    Excel does not support timezone-aware
+    datetime objects, so timezone information
+    is removed while preserving date and time.
     """
 
     if isinstance(
@@ -346,6 +348,8 @@ def _get_tag_columns(
     """
     Find every unique OCI Defined Tag across
     all resources in a service.
+
+    The 'schedule' tag is excluded.
 
     Example:
 
@@ -376,6 +380,13 @@ def _get_tag_columns(
                 continue
 
             for tag_key in tags.keys():
+
+                # -------------------------------------------------
+                # Exclude schedule tag
+                # -------------------------------------------------
+
+                if str(tag_key).strip().lower() == "schedule":
+                    continue
 
                 tag_columns.add(
                     f"{namespace}:{tag_key}"
@@ -410,6 +421,12 @@ def _get_tag_value(
         )
     )
 
+    # Safety check in case schedule is passed
+    # from another part of the program.
+    if tag_key.strip().lower() == "schedule":
+
+        return ""
+
     namespace_tags = defined_tags.get(
         namespace,
         {},
@@ -427,8 +444,10 @@ def _get_tag_value(
         "",
     )
 
-    # Excel cells should not receive
-    # complex dictionary/list objects.
+    # ---------------------------------------------------------
+    # Convert complex values to strings
+    # ---------------------------------------------------------
+
     if isinstance(
         value,
         (dict, list),
@@ -442,7 +461,9 @@ def _get_tag_value(
 def _format_header(
     sheet,
 ) -> None:
-    """Format worksheet header."""
+    """
+    Format worksheet header.
+    """
 
     for cell in sheet[1]:
 
@@ -459,7 +480,9 @@ def _format_header(
 def _format_sheet(
     sheet,
 ) -> None:
-    """Apply common worksheet formatting."""
+    """
+    Apply common worksheet formatting.
+    """
 
     for row in sheet.iter_rows():
 
