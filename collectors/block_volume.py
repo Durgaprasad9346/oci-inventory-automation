@@ -8,14 +8,16 @@ from utils.availability_domains import get_availability_domains
 
 def collect_block_volume(config):
     """
-    Collect all OCI Block Volumes across
-    all subscribed regions, availability domains,
-    and accessible compartments.
+    Collect all OCI Block Volumes across:
+        - All subscribed regions
+        - All availability domains
+        - All accessible compartments
 
     Collects:
         - Resource information
         - Creation date
         - OCI Defined Tags
+        - Existing Block Volume details
     """
 
     compartments = get_compartments(config)
@@ -72,9 +74,9 @@ def collect_block_volume(config):
                                     "",
                                 ),
 
-                                # -------------------------------------------------
+                                # -----------------------------------------
                                 # Creation Date
-                                # -------------------------------------------------
+                                # -----------------------------------------
 
                                 time_created=getattr(
                                     volume,
@@ -82,9 +84,9 @@ def collect_block_volume(config):
                                     None,
                                 ),
 
-                                # -------------------------------------------------
+                                # -----------------------------------------
                                 # OCI Defined Tags
-                                # -------------------------------------------------
+                                # -----------------------------------------
 
                                 defined_tags=getattr(
                                     volume,
@@ -92,9 +94,9 @@ def collect_block_volume(config):
                                     None,
                                 ),
 
-                                # -------------------------------------------------
-                                # Existing resource details
-                                # -------------------------------------------------
+                                # -----------------------------------------
+                                # Existing details
+                                # -----------------------------------------
 
                                 details={
                                     "availability_domain": getattr(
@@ -112,6 +114,16 @@ def collect_block_volume(config):
                                         "vpus_per_gb",
                                         "",
                                     ),
+                                    "volume_group_id": getattr(
+                                        volume,
+                                        "volume_group_id",
+                                        "",
+                                    ),
+                                    "source_details": getattr(
+                                        volume,
+                                        "source_details",
+                                        "",
+                                    ),
                                 },
                             )
                         )
@@ -119,7 +131,8 @@ def collect_block_volume(config):
                 except Exception as error:
 
                     print(
-                        f"    ERROR in compartment "
+                        f"    ERROR collecting Block Volume "
+                        f"from compartment "
                         f"{compartment['name']}: {error}"
                     )
 
