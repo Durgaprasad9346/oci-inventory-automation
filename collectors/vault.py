@@ -7,8 +7,15 @@ from utils.regions import get_regions
 
 def collect_vault(config):
     """
-    Collect all OCI Vaults across all subscribed regions
-    and accessible compartments.
+    Collect all OCI Vaults across:
+        - All subscribed regions
+        - All accessible compartments
+
+    Collects:
+        - Resource information
+        - Creation date
+        - OCI Defined Tags
+        - Existing Vault details
     """
 
     compartments = get_compartments(config)
@@ -18,57 +25,108 @@ def collect_vault(config):
 
     for region in regions:
 
-        print(f"  Processing Vault region: {region}")
+        print(
+            f"  Processing Vault region: {region}"
+        )
 
         region_config = config.copy()
         region_config["region"] = region
 
-        kms_vault_client = oci.key_management.KmsVaultClient(
+        vault_client = oci.vault.VaultsClient(
             region_config
         )
 
         for compartment in compartments:
 
-            vaults = oci.pagination.list_call_get_all_results(
-                kms_vault_client.list_vaults,
-                compartment_id=compartment["id"],
-            )
+            try:
 
-            for vault in vaults.data:
-
-                resources.append(
-                    Resource(
-                        service="Vault",
-                        resource_type="Vault",
-                        name=vault.display_name,
-                        ocid=vault.id,
+                vaults = (
+                    oci.pagination.list_call_get_all_results(
+                        vault_client.list_vaults,
                         compartment_id=compartment["id"],
-                        compartment_name=compartment["name"],
-                        region=region,
-                        state=vault.lifecycle_state,
-                        details={
-                            "vault_type": getattr(
+                    )
+                )
+
+                for vault in vaults.data:
+
+                    resources.append(
+                        Resource(
+                            service="Vault",
+                            resource_type="Vault",
+                            name=getattr(
                                 vault,
-                                "vault_type",
+                                "display_name",
                                 "",
                             ),
-                            "management_endpoint": getattr(
+                            ocid=getattr(
                                 vault,
-                                "management_endpoint",
+                                "id",
                                 "",
                             ),
-                            "crypto_endpoint": getattr(
+                            compartment_id=compartment["id"],
+                            compartment_name=compartment["name"],
+                            region=region,
+                            state=getattr(
                                 vault,
-                                "crypto_endpoint",
+                                "lifecycle_state",
                                 "",
                             ),
-                            "time_created": getattr(
+
+                            # -----------------------------------------
+                            # Creation Date
+                            # -----------------------------------------
+
+                            time_created=getattr(
                                 vault,
                                 "time_created",
-                                "",
+                                None,
                             ),
-                        },
+
+                            # -----------------------------------------
+                            # OCI Defined Tags
+                            # -----------------------------------------
+
+                            defined_tags=getattr(
+                                vault,
+                                "defined_tags",
+                                None,
+                            ),
+
+                            # -----------------------------------------
+                            # Existing Vault details
+                            # -----------------------------------------
+
+                            details={
+                                "vault_type": getattr(
+                                    vault,
+                                    "vault_type",
+                                    "",
+                                ),
+                                "crypto_endpoint": getattr(
+                                    vault,
+                                    "crypto_endpoint",
+                                    "",
+                                ),
+                                "management_endpoint": getattr(
+                                    vault,
+                                    "management_endpoint",
+                                    "",
+                                ),
+                                "restored_from_vault_id": getattr(
+                                    vault,
+                                    "restored_from_vault_id",
+                                    "",
+                                ),
+                            },
+                        )
                     )
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting Vault "
+                    f"from compartment "
+                    f"{compartment['name']}: {error}"
                 )
 
     return resources
