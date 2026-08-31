@@ -7,19 +7,13 @@ from utils.regions import get_regions
 
 def collect_secrets(config):
     """
-    Collect OCI Secrets across:
+    Collect OCI Vault Secrets across:
         - All subscribed regions
         - All accessible compartments
-        - All accessible vaults
+        - All vaults
 
-    Secrets are listed through the VaultsClient
-    management endpoint.
-
-    Collects:
-        - Resource information
-        - Creation date
-        - OCI Defined Tags
-        - Existing Secret details
+    Vaults are discovered using KmsVaultClient.
+    Secrets are discovered using VaultsClient.
     """
 
     compartments = get_compartments(config)
@@ -29,32 +23,34 @@ def collect_secrets(config):
 
     for region in regions:
 
-        print(
-            f"  Processing Secrets region: {region}"
-        )
+        print(f"  Processing Secrets region: {region}")
 
         region_config = config.copy()
         region_config["region"] = region
 
-        # -----------------------------------------------------
-        # Vault management client
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # KmsVaultClient = Vault management
+        # ---------------------------------------------------------
 
-        vault_client = oci.vault.VaultsClient(
+        kms_vault_client = oci.key_management.KmsVaultClient(
+            region_config
+        )
+
+        # ---------------------------------------------------------
+        # VaultsClient = Secrets management
+        # ---------------------------------------------------------
+
+        secrets_client = oci.vault.VaultsClient(
             region_config
         )
 
         for compartment in compartments:
 
-            # -------------------------------------------------
-            # Get all vaults in the compartment
-            # -------------------------------------------------
-
             try:
 
                 vaults = (
                     oci.pagination.list_call_get_all_results(
-                        vault_client.list_vaults,
+                        kms_vault_client.list_vaults,
                         compartment_id=compartment["id"],
                     )
                 )
@@ -63,15 +59,10 @@ def collect_secrets(config):
 
                 print(
                     f"    ERROR collecting vaults from "
-                    f"compartment "
-                    f"{compartment['name']}: {error}"
+                    f"compartment {compartment['name']}: {error}"
                 )
 
                 continue
-
-            # -------------------------------------------------
-            # Process every vault
-            # -------------------------------------------------
 
             for vault in vaults.data:
 
@@ -87,48 +78,14 @@ def collect_secrets(config):
                     "",
                 )
 
-                management_endpoint = getattr(
-                    vault,
-                    "management_endpoint",
-                    None,
-                )
-
                 if not vault_id:
-
-                    continue
-
-                if not management_endpoint:
-
-                    print(
-                        f"    WARNING: Vault "
-                        f"{vault_name} does not have "
-                        f"a management endpoint. "
-                        f"Skipping secrets."
-                    )
-
                     continue
 
                 try:
 
-                    # -------------------------------------------------
-                    # Create a VaultsClient using the vault-specific
-                    # management endpoint.
-                    # -------------------------------------------------
-
-                    management_client = (
-                        oci.vault.VaultsClient(
-                            region_config,
-                            service_endpoint=management_endpoint,
-                        )
-                    )
-
-                    # -------------------------------------------------
-                    # List secrets
-                    # -------------------------------------------------
-
                     secrets = (
                         oci.pagination.list_call_get_all_results(
-                            management_client.list_secrets,
+                            secrets_client.list_secrets,
                             compartment_id=compartment["id"],
                             vault_id=vault_id,
                         )
@@ -143,7 +100,11 @@ def collect_secrets(config):
                                 name=getattr(
                                     secret,
                                     "secret_name",
-                                    "",
+                                    getattr(
+                                        secret,
+                                        "name",
+                                        "",
+                                    ),
                                 ),
                                 ocid=getattr(
                                     secret,
@@ -159,9 +120,9 @@ def collect_secrets(config):
                                     "",
                                 ),
 
-                                # -------------------------------------
+                                # -----------------------------------------
                                 # Creation Date
-                                # -------------------------------------
+                                # -----------------------------------------
 
                                 time_created=getattr(
                                     secret,
@@ -169,9 +130,9 @@ def collect_secrets(config):
                                     None,
                                 ),
 
-                                # -------------------------------------
+                                # -----------------------------------------
                                 # OCI Defined Tags
-                                # -------------------------------------
+                                # -----------------------------------------
 
                                 defined_tags=getattr(
                                     secret,
@@ -179,9 +140,9 @@ def collect_secrets(config):
                                     None,
                                 ),
 
-                                # -------------------------------------
-                                # Existing Secret details
-                                # -------------------------------------
+                                # -----------------------------------------
+                                # Secret details
+                                # -----------------------------------------
 
                                 details={
                                     "vault_id": vault_id,
@@ -191,9 +152,23 @@ def collect_secrets(config):
                                         "key_id",
                                         "",
                                     ),
+                                    "secret_name": getattr(
+                                        secret,
+                                        "secret_name",
+                                        getattr(
+                                            secret,
+                                            "name",
+                                            "",
+                                        ),
+                                    ),
                                     "description": getattr(
                                         secret,
                                         "description",
+                                        "",
+                                    ),
+                                    "secret_rules": getattr(
+                                        secret,
+                                        "secret_rules",
                                         "",
                                     ),
                                     "time_of_deletion": getattr(
@@ -201,15 +176,10 @@ def collect_secrets(config):
                                         "time_of_deletion",
                                         None,
                                     ),
-                                    "rotation_state": getattr(
+                                    "time_of_expiry": getattr(
                                         secret,
-                                        "rotation_state",
-                                        "",
-                                    ),
-                                    "secret_rules": getattr(
-                                        secret,
-                                        "secret_rules",
-                                        "",
+                                        "time_of_expiry",
+                                        None,
                                     ),
                                 },
                             )
@@ -218,9 +188,8 @@ def collect_secrets(config):
                 except Exception as error:
 
                     print(
-                        f"    ERROR collecting secrets "
-                        f"from vault "
-                        f"{vault_name}: {error}"
+                        f"    ERROR collecting secrets from "
+                        f"vault {vault_name}: {error}"
                     )
 
     return resources
