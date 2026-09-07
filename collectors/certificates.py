@@ -143,4 +143,3 @@ def collect_certificates(config):
                 )
 
     return resources
-py
