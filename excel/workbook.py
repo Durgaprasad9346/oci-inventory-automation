@@ -173,7 +173,7 @@ def _resource_value(resource, key, default=""):
         None,
     )
 
-    if value is not None and value != "":
+    if not _is_empty(value):
         return value
 
     details = _safe_get(
@@ -344,10 +344,7 @@ def _normalize_resource(resource):
                     if key.startswith("_"):
                         continue
 
-                    if key not in result or result[key] in (
-                        None,
-                        "",
-                    ):
+                    if key not in result or _is_empty(result[key]):
                         result[key] = value
 
             except Exception:
@@ -1606,7 +1603,7 @@ def _get_column_value(resource, column):
                 None,
             )
 
-            if value is not None and value != "":
+            if not _is_empty(value):
                 return value
 
     # Generic normalized key
