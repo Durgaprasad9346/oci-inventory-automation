@@ -196,4 +196,3 @@ def collect_ons_subscriptions(config):
                     )
 
     return resources
-PY
