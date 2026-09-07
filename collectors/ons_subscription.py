@@ -7,16 +7,13 @@ from utils.regions import get_regions
 
 def collect_ons_subscriptions(config):
     """
-    Collect all OCI Notifications Service (ONS) Subscriptions across:
-        - All subscribed regions
-        - All accessible compartments
-        - All notification topics
+    Collect OCI Notifications Service subscriptions.
 
-    Collects:
-        - Subscription information
-        - Creation date
-        - OCI Defined Tags
-        - Subscription details
+    Topics are collected using:
+        NotificationControlPlaneClient
+
+    Subscriptions are collected using:
+        NotificationDataPlaneClient
     """
 
     compartments = get_compartments(config)
@@ -33,37 +30,63 @@ def collect_ons_subscriptions(config):
         region_config = config.copy()
         region_config["region"] = region
 
-        ons_client = oci.ons.NotificationControlPlaneClient(
+        # -------------------------------------------------------------
+        # IMPORTANT:
+        # Topics -> Control Plane
+        # Subscriptions -> Data Plane
+        # -------------------------------------------------------------
+
+        control_client = oci.ons.NotificationControlPlaneClient(
+            region_config
+        )
+
+        data_client = oci.ons.NotificationDataPlaneClient(
             region_config
         )
 
         for compartment in compartments:
 
+            compartment_id = compartment["id"]
+            compartment_name = compartment["name"]
+
+            # ---------------------------------------------------------
+            # TOPICS
+            # ---------------------------------------------------------
+
             try:
 
-                topics = (
-                    oci.pagination.list_call_get_all_results(
-                        ons_client.list_topics,
-                        compartment_id=compartment["id"],
-                    )
+                topics = oci.pagination.list_call_get_all_results(
+                    control_client.list_topics,
+                    compartment_id=compartment_id,
                 )
 
             except Exception as error:
 
                 print(
-                    f"    ERROR collecting ONS Topics from "
-                    f"compartment {compartment['name']}: {error}"
+                    f"    ERROR collecting ONS Topics from compartment "
+                    f"{compartment_name}: {error}"
                 )
 
                 continue
+
+            # ---------------------------------------------------------
+            # EACH TOPIC
+            # ---------------------------------------------------------
 
             for topic in topics.data:
 
                 topic_id = getattr(
                     topic,
                     "topic_id",
-                    "",
+                    None,
                 )
+
+                if not topic_id:
+                    topic_id = getattr(
+                        topic,
+                        "id",
+                        "",
+                    )
 
                 topic_name = getattr(
                     topic,
@@ -74,12 +97,16 @@ def collect_ons_subscriptions(config):
                 if not topic_id:
                     continue
 
+                # -----------------------------------------------------
+                # SUBSCRIPTIONS
+                # -----------------------------------------------------
+
                 try:
 
                     subscriptions = (
                         oci.pagination.list_call_get_all_results(
-                            ons_client.list_subscriptions,
-                            compartment_id=compartment["id"],
+                            data_client.list_subscriptions,
+                            compartment_id=compartment_id,
                             topic_id=topic_id,
                         )
                     )
@@ -87,11 +114,15 @@ def collect_ons_subscriptions(config):
                 except Exception as error:
 
                     print(
-                        f"    ERROR collecting subscriptions "
-                        f"for topic {topic_name}: {error}"
+                        f"    ERROR collecting subscriptions for topic "
+                        f"{topic_name}: {error}"
                     )
 
                     continue
+
+                # -----------------------------------------------------
+                # EACH SUBSCRIPTION
+                # -----------------------------------------------------
 
                 for subscription in subscriptions.data:
 
@@ -109,39 +140,29 @@ def collect_ons_subscriptions(config):
                                 "id",
                                 "",
                             ),
-                            compartment_id=compartment["id"],
-                            compartment_name=compartment["name"],
+                            compartment_id=compartment_id,
+                            compartment_name=compartment_name,
                             region=region,
                             state=getattr(
                                 subscription,
                                 "lifecycle_state",
                                 "",
                             ),
-
-                            # -----------------------------------------
-                            # Creation Date
-                            # -----------------------------------------
-
                             time_created=getattr(
                                 subscription,
                                 "time_created",
                                 None,
                             ),
-
-                            # -----------------------------------------
-                            # OCI Defined Tags
-                            # -----------------------------------------
-
                             defined_tags=getattr(
                                 subscription,
                                 "defined_tags",
                                 None,
                             ),
-
-                            # -----------------------------------------
-                            # Subscription details
-                            # -----------------------------------------
-
+                            freeform_tags=getattr(
+                                subscription,
+                                "freeform_tags",
+                                None,
+                            ),
                             details={
                                 "subscription_id": getattr(
                                     subscription,
@@ -175,3 +196,4 @@ def collect_ons_subscriptions(config):
                     )
 
     return resources
+PY
