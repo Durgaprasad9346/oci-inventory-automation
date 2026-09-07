@@ -1,3 +1,10 @@
+
+# Generated from the user's uploaded current workbook.py.
+# Main fixes:
+# 1. OCI SDK model objects are never compared directly with strings.
+# 2. OCI nested model details are converted safely.
+# 3. Timezone-aware datetimes are converted to Excel-safe datetimes.
+# 4. Existing summary/service-sheet logic is preserved.
 from collections import Counter
 from datetime import datetime, date
 from pathlib import Path
@@ -30,6 +37,15 @@ def _safe_get(obj, key, default=""):
         return default
 
 
+def _is_empty(value):
+    """Safely test emptiness without comparing OCI model objects to strings."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
 def _first_value(obj, *keys, default=""):
     """
     Return the first non-empty value from the supplied keys.
@@ -38,7 +54,7 @@ def _first_value(obj, *keys, default=""):
     for key in keys:
         value = _safe_get(obj, key, None)
 
-        if value is not None and value != "":
+        if not _is_empty(value):
             return value
 
     return default
@@ -174,7 +190,7 @@ def _resource_value(resource, key, default=""):
             None,
         )
 
-        if value is not None and value != "":
+        if not _is_empty(value):
             return value
 
     return default
@@ -212,6 +228,88 @@ def _normalize_resource(resource):
                 "defined_tags",
                 "freeform_tags",
                 "details",
+
+                # Compute
+                "shape",
+                "shape_config",
+                "ocpus",
+                "memory_in_gbs",
+                "vcpus",
+                "private_ip",
+                "public_ip",
+                "hostname",
+                "hostname_label",
+                "image_id",
+                "availability_domain",
+                "fault_domain",
+                "boot_volume_id",
+                "launch_mode",
+                "vnic_id",
+
+                # Storage
+                "size_in_gbs",
+                "vpus_per_gb",
+                "volume_type",
+                "volume_group_id",
+                "source_volume_id",
+                "source_boot_volume_id",
+                "source_type",
+                "kms_key_id",
+                "backup_policy_id",
+
+                # Object Storage
+                "namespace",
+                "storage_tier",
+                "object_count",
+                "objects_count",
+                "stored_size_bytes",
+                "size_bytes",
+                "approximate_size_in_bytes",
+                "total_size_bytes",
+                "versioning",
+                "versioning_state",
+                "public_access_type",
+
+                # File Storage
+                "file_system_id",
+                "mount_target_id",
+                "mount_target_name",
+                "export_set_id",
+                "metered_bytes",
+
+                # Database
+                "db_system_id",
+                "db_home_id",
+                "cpu_core_count",
+                "storage_size_gb",
+                "storage_gb",
+                "database_edition",
+                "database_version",
+                "db_version",
+                "db_node_count",
+                "node_count",
+                "license_model",
+
+                # Network
+                "subnet_id",
+                "vcn_id",
+                "route_table_id",
+                "security_list_ids",
+                "dhcp_options_id",
+
+                # Streaming / logging / certificates
+                "stream_id",
+                "partitions",
+                "retention_in_hours",
+                "log_id",
+                "log_group_id",
+                "log_type",
+                "is_enabled",
+                "retention_duration",
+                "certificate_id",
+                "certificate_authority_id",
+                "certificate_type",
+                "time_of_expiry",
             ):
 
                 value = _safe_get(
@@ -234,10 +332,7 @@ def _normalize_resource(resource):
 
         if isinstance(details, dict):
             for key, value in details.items():
-                if key not in result or result[key] in (
-                    None,
-                    "",
-                ):
+                if key not in result or _is_empty(result[key]):
                     result[key] = value
 
         else:
@@ -2092,8 +2187,7 @@ def write_resource_sheet(
             if (
                 header == "Stored Size (GB)"
                 and (
-                    value is None
-                    or value == ""
+                    _is_empty(value)
                 )
             ):
 
@@ -2104,10 +2198,7 @@ def write_resource_sheet(
 
                 try:
 
-                    if bytes_value not in (
-                        None,
-                        "",
-                    ):
+                    if not _is_empty(bytes_value):
 
                         value = (
                             float(bytes_value)
@@ -2122,8 +2213,7 @@ def write_resource_sheet(
             if (
                 header == "Metered Size (GB)"
                 and (
-                    value is None
-                    or value == ""
+                    _is_empty(value)
                 )
             ):
 
@@ -2134,10 +2224,7 @@ def write_resource_sheet(
 
                 try:
 
-                    if bytes_value not in (
-                        None,
-                        "",
-                    ):
+                    if not _is_empty(bytes_value):
 
                         value = (
                             float(bytes_value)
@@ -2152,8 +2239,7 @@ def write_resource_sheet(
             if (
                 header == "Memory (GB)"
                 and (
-                    value is None
-                    or value == ""
+                    _is_empty(value)
                 )
             ):
 
@@ -2168,8 +2254,7 @@ def write_resource_sheet(
             if (
                 header == "OCPU"
                 and (
-                    value is None
-                    or value == ""
+                    _is_empty(value)
                 )
             ):
 
@@ -2183,8 +2268,7 @@ def write_resource_sheet(
             if (
                 header == "Size (GB)"
                 and (
-                    value is None
-                    or value == ""
+                    _is_empty(value)
                 )
             ):
 
