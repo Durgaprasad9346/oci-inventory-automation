@@ -143,4 +143,3 @@ def collect_certificate_authorities(config):
                 )
 
     return resources
-PY
