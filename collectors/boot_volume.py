@@ -1,197 +1,505 @@
 import oci
 
+from collectors.base import Resource
+from utils.compartments import get_compartments
+from utils.regions import get_regions
+
+
+def _get(obj, name, default=""):
+    """
+    Safely get an attribute from an OCI SDK object.
+    """
+
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+
+    return getattr(obj, name, default)
+
+
+def _to_dict(obj):
+    """
+    Safely convert OCI SDK model to dictionary.
+    """
+
+    if obj is None:
+        return {}
+
+    if isinstance(obj, dict):
+        return obj
+
+    try:
+        if hasattr(obj, "to_dict"):
+            return obj.to_dict()
+    except Exception:
+        pass
+
+    try:
+        if hasattr(obj, "__dict__"):
+            return obj.__dict__
+    except Exception:
+        pass
+
+    return {}
+
 
 def collect_boot_volume(config):
     """
-    Collect OCI Boot Volumes across configured regions and compartments.
+    Collect OCI Boot Volumes across:
+
+        - All subscribed regions
+        - All accessible compartments
+        - All availability domains
+
+    Collects important Boot Volume information including:
+
+        Basic:
+        - Name
+        - OCID
+        - Compartment
+        - Region
+        - Availability Domain
+        - Lifecycle State
+        - Creation Time
+
+        Storage:
+        - Size in GB
+        - VPU per GB
+        - Volume Performance
+        - Volume Group
+
+        Source:
+        - Source Type
+        - Source ID
+        - Source Volume Backup ID
+
+        Encryption:
+        - KMS Key ID
+
+        Configuration:
+        - Hydrated
+        - Autotune Policies
+        - Policy
+
+        Tags:
+        - Defined Tags
+        - Freeform Tags
     """
 
     resources = []
 
-    try:
-        tenancy_id = config["tenancy_id"]
-        regions = config.get("regions", [])
-        compartments = config.get("compartments", [])
+    compartments = get_compartments(config)
+    regions = get_regions(config)
 
-        for region in regions:
+    # =============================================================
+    # TENANCY OCID
+    # =============================================================
+    #
+    # OCI config normally uses "tenancy", not "tenancy_id".
+    #
+    # =============================================================
 
-            print(
-                f"  Processing Boot Volume region: {region}"
+    tenancy_id = config.get("tenancy")
+
+    if not tenancy_id:
+
+        print(
+            "    ERROR collecting Boot Volumes: "
+            "OCI tenancy OCID not found in config"
+        )
+
+        return resources
+
+    # =============================================================
+    # PROCESS REGIONS
+    # =============================================================
+
+    for region in regions:
+
+        print(
+            f"  Processing Boot Volume region: {region}"
+        )
+
+        region_config = config.copy()
+        region_config["region"] = region
+
+        # =========================================================
+        # BLOCK STORAGE CLIENT
+        # =========================================================
+
+        try:
+
+            blockstorage_client = oci.core.BlockstorageClient(
+                region_config
             )
 
-            try:
-                blockstorage_client = oci.core.BlockstorageClient(
-                    config,
-                    region=region
+        except Exception as error:
+
+            print(
+                f"    ERROR creating Block Storage client "
+                f"for region {region}: {error}"
+            )
+
+            continue
+
+        # =========================================================
+        # IDENTITY CLIENT
+        # =========================================================
+
+        try:
+
+            identity_client = oci.identity.IdentityClient(
+                region_config
+            )
+
+            availability_domains = (
+                oci.pagination.list_call_get_all_results(
+                    identity_client.list_availability_domains,
+                    compartment_id=tenancy_id,
+                )
+            ).data
+
+        except Exception as error:
+
+            print(
+                f"    ERROR getting Availability Domains "
+                f"for region {region}: {error}"
+            )
+
+            continue
+
+        # =========================================================
+        # COMPARTMENTS
+        # =========================================================
+
+        for compartment in compartments:
+
+            compartment_id = compartment["id"]
+
+            compartment_name = compartment.get(
+                "name",
+                compartment_id,
+            )
+
+            # =====================================================
+            # AVAILABILITY DOMAINS
+            # =====================================================
+
+            for availability_domain in availability_domains:
+
+                ad_name = _get(
+                    availability_domain,
+                    "name",
+                    "",
                 )
 
-                for compartment in compartments:
+                try:
 
-                    compartment_id = compartment.get("id")
-                    compartment_name = compartment.get(
-                        "name",
-                        compartment_id
+                    # =================================================
+                    # LIST BOOT VOLUMES
+                    # =================================================
+
+                    response = (
+                        oci.pagination.list_call_get_all_results(
+                            blockstorage_client.list_boot_volumes,
+                            compartment_id=compartment_id,
+                            availability_domain=ad_name,
+                        )
                     )
+
+                    boot_volumes = response.data
+
+                except Exception as error:
+
+                    print(
+                        f"    ERROR collecting Boot Volumes "
+                        f"from compartment "
+                        f"{compartment_name}, "
+                        f"AD {ad_name}: {error}"
+                    )
+
+                    continue
+
+                # =====================================================
+                # PROCESS BOOT VOLUMES
+                # =====================================================
+
+                for boot_volume in boot_volumes:
 
                     try:
 
-                        response = blockstorage_client.list_boot_volumes(
-                            availability_domain=None,
-                            compartment_id=compartment_id
+                        # =================================================
+                        # BASIC INFORMATION
+                        # =================================================
+
+                        boot_volume_id = _get(
+                            boot_volume,
+                            "id",
+                            "",
                         )
 
-                        for boot_volume in response.data:
+                        display_name = _get(
+                            boot_volume,
+                            "display_name",
+                            "",
+                        )
 
-                            resources.append(
-                                {
-                                    "service": "Boot Volume",
-                                    "resource_type": "Boot Volume",
+                        lifecycle_state = _get(
+                            boot_volume,
+                            "lifecycle_state",
+                            "",
+                        )
 
-                                    "id": getattr(
-                                        boot_volume,
-                                        "id",
-                                        ""
-                                    ),
+                        lifecycle_details = _get(
+                            boot_volume,
+                            "lifecycle_details",
+                            "",
+                        )
 
-                                    "display_name": getattr(
-                                        boot_volume,
-                                        "display_name",
-                                        ""
-                                    ),
+                        time_created = _get(
+                            boot_volume,
+                            "time_created",
+                            None,
+                        )
 
-                                    "name": getattr(
-                                        boot_volume,
-                                        "display_name",
-                                        ""
-                                    ),
+                        # =================================================
+                        # STORAGE INFORMATION
+                        # =================================================
 
-                                    "compartment_id": getattr(
-                                        boot_volume,
-                                        "compartment_id",
-                                        compartment_id
-                                    ),
+                        size_in_gbs = _get(
+                            boot_volume,
+                            "size_in_gbs",
+                            None,
+                        )
 
-                                    "compartment_name": (
-                                        compartment_name
-                                    ),
+                        vpus_per_gb = _get(
+                            boot_volume,
+                            "vpus_per_gb",
+                            None,
+                        )
 
-                                    "availability_domain": getattr(
-                                        boot_volume,
-                                        "availability_domain",
-                                        ""
-                                    ),
+                        volume_group_id = _get(
+                            boot_volume,
+                            "volume_group_id",
+                            "",
+                        )
 
-                                    "lifecycle_state": getattr(
-                                        boot_volume,
-                                        "lifecycle_state",
-                                        ""
-                                    ),
+                        # =================================================
+                        # SOURCE INFORMATION
+                        # =================================================
 
-                                    "size_in_gbs": getattr(
-                                        boot_volume,
-                                        "size_in_gbs",
-                                        0
-                                    ),
+                        source_type = _get(
+                            boot_volume,
+                            "source_type",
+                            "",
+                        )
 
-                                    "vpus_per_gb": getattr(
-                                        boot_volume,
-                                        "vpus_per_gb",
-                                        0
-                                    ),
+                        source_id = _get(
+                            boot_volume,
+                            "source_id",
+                            "",
+                        )
 
-                                    "volume_performance": getattr(
-                                        boot_volume,
-                                        "vpus_per_gb",
-                                        0
-                                    ),
+                        source_volume_backup_id = _get(
+                            boot_volume,
+                            "source_volume_backup_id",
+                            "",
+                        )
 
-                                    "time_created": getattr(
-                                        boot_volume,
-                                        "time_created",
-                                        None
-                                    ),
+                        # =================================================
+                        # ENCRYPTION
+                        # =================================================
 
-                                    "is_hydrated": getattr(
-                                        boot_volume,
-                                        "is_hydrated",
-                                        None
-                                    ),
+                        kms_key_id = _get(
+                            boot_volume,
+                            "kms_key_id",
+                            "",
+                        )
 
-                                    "source_volume_backup_id": getattr(
-                                        boot_volume,
-                                        "source_volume_backup_id",
-                                        ""
-                                    ),
+                        # =================================================
+                        # CONFIGURATION
+                        # =================================================
 
-                                    "kms_key_id": getattr(
-                                        boot_volume,
-                                        "kms_key_id",
-                                        ""
-                                    ),
+                        is_hydrated = _get(
+                            boot_volume,
+                            "is_hydrated",
+                            None,
+                        )
 
-                                    "freeform_tags": getattr(
-                                        boot_volume,
-                                        "freeform_tags",
-                                        {}
-                                    ),
+                        autotune_policies = _get(
+                            boot_volume,
+                            "autotune_policies",
+                            [],
+                        )
 
-                                    "defined_tags": getattr(
-                                        boot_volume,
-                                        "defined_tags",
-                                        {}
-                                    ),
+                        policy = _get(
+                            boot_volume,
+                            "policy",
+                            "",
+                        )
 
-                                    "volume_group_id": getattr(
-                                        boot_volume,
-                                        "volume_group_id",
-                                        ""
-                                    ),
+                        # =================================================
+                        # TAGS
+                        # =================================================
 
-                                    "autotune_policies": getattr(
-                                        boot_volume,
-                                        "autotune_policies",
-                                        []
-                                    ),
+                        defined_tags = _get(
+                            boot_volume,
+                            "defined_tags",
+                            {},
+                        )
 
-                                    "policy": getattr(
-                                        boot_volume,
-                                        "policy",
-                                        ""
-                                    ),
+                        freeform_tags = _get(
+                            boot_volume,
+                            "freeform_tags",
+                            {},
+                        )
 
-                                    "source_type": getattr(
-                                        boot_volume,
-                                        "source_type",
-                                        ""
-                                    ),
+                        # =================================================
+                        # DETAILS
+                        # =================================================
 
-                                    "source_id": getattr(
-                                        boot_volume,
-                                        "source_id",
-                                        ""
-                                    ),
-                                }
-                            )
+                        details = {
 
-                    except Exception as e:
+                            # ---------------------------------------------
+                            # BASIC
+                            # ---------------------------------------------
+
+                            "availability_domain":
+                                ad_name,
+
+                            "lifecycle_state":
+                                lifecycle_state,
+
+                            "lifecycle_details":
+                                lifecycle_details,
+
+                            # ---------------------------------------------
+                            # STORAGE
+                            # ---------------------------------------------
+
+                            "size_in_gbs":
+                                size_in_gbs,
+
+                            "size_gb":
+                                size_in_gbs,
+
+                            "volume_size_gb":
+                                size_in_gbs,
+
+                            "vpus_per_gb":
+                                vpus_per_gb,
+
+                            "volume_performance":
+                                vpus_per_gb,
+
+                            "volume_group_id":
+                                volume_group_id,
+
+                            # ---------------------------------------------
+                            # SOURCE
+                            # ---------------------------------------------
+
+                            "source_type":
+                                source_type,
+
+                            "source_id":
+                                source_id,
+
+                            "source_volume_backup_id":
+                                source_volume_backup_id,
+
+                            # ---------------------------------------------
+                            # ENCRYPTION
+                            # ---------------------------------------------
+
+                            "kms_key_id":
+                                kms_key_id,
+
+                            "is_encrypted":
+                                bool(kms_key_id),
+
+                            # ---------------------------------------------
+                            # CONFIGURATION
+                            # ---------------------------------------------
+
+                            "is_hydrated":
+                                is_hydrated,
+
+                            "autotune_policies":
+                                _to_dict(autotune_policies),
+
+                            "policy":
+                                policy,
+
+                            # ---------------------------------------------
+                            # TAGS
+                            # ---------------------------------------------
+
+                            "defined_tags":
+                                defined_tags,
+
+                            "freeform_tags":
+                                freeform_tags,
+                        }
+
+                        # =================================================
+                        # RESOURCE OBJECT
+                        # =================================================
+
+                        resource = Resource(
+
+                            service="Boot Volume",
+
+                            resource_type="Boot Volume",
+
+                            name=display_name,
+
+                            ocid=boot_volume_id,
+
+                            compartment_id=(
+                                _get(
+                                    boot_volume,
+                                    "compartment_id",
+                                    compartment_id,
+                                )
+                            ),
+
+                            compartment_name=(
+                                compartment_name
+                            ),
+
+                            region=region,
+
+                            state=lifecycle_state,
+
+                            time_created=time_created,
+
+                            defined_tags=defined_tags,
+
+                            freeform_tags=freeform_tags,
+
+                            details=details,
+                        )
+
+                        resources.append(
+                            resource
+                        )
+
+                    except Exception as error:
 
                         print(
-                            f"    ERROR collecting Boot Volumes "
-                            f"from compartment "
-                            f"{compartment_name}: {e}"
+                            f"    ERROR processing Boot Volume "
+                            f"{display_name}: {error}"
                         )
 
-            except Exception as e:
+    # =============================================================
+    # SUMMARY
+    # =============================================================
 
-                print(
-                    f"  ERROR collecting Boot Volumes "
-                    f"from region {region}: {e}"
-                )
-
-    except Exception as e:
-
-        print(
-            f"ERROR collecting Boot Volumes: {e}"
-        )
+    print(
+        f"Boot Volumes: {len(resources)} resources found"
+    )
 
     return resources
