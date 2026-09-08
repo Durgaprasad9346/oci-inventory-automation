@@ -1,14 +1,15 @@
 import oci
 
+from collectors.base import Resource
+from utils.compartments import get_compartments
+from utils.regions import get_regions
 
-# ============================================================
-# Generic helpers
-# ============================================================
 
 def _get(obj, name, default=None):
     """
     Safely get an attribute from an OCI SDK object or dictionary.
     """
+
     if obj is None:
         return default
 
@@ -18,177 +19,50 @@ def _get(obj, name, default=None):
     return getattr(obj, name, default)
 
 
-def _safe_dict(obj):
-    """
-    Convert OCI SDK object to dictionary when possible.
-    """
-    if obj is None:
-        return {}
-
-    if isinstance(obj, dict):
-        return obj
-
-    try:
-        if hasattr(obj, "to_dict"):
-            return obj.to_dict()
-    except Exception:
-        pass
-
-    return {}
-
-
-# ============================================================
-# Configuration helpers
-# ============================================================
-
-def get_regions(config):
-    """
-    Get configured OCI regions.
-    """
-    return config.get("regions", [])
-
-
-def get_compartments(config):
-    """
-    Get configured compartments.
-    """
-    return config.get("compartments", [])
-
-
-# ============================================================
-# Shape details
-# ============================================================
-
 def _get_shape_details(compute_client, shape_name):
     """
-    Get additional shape information if required.
+    Get additional shape information when instance.shape_config
+    does not contain complete information.
     """
 
     if not shape_name:
         return None
 
     try:
-
-        response = compute_client.get_shape(
-            shape_name
-        )
-
+        response = compute_client.get_shape(shape_name)
         return response.data
 
     except Exception:
-
         return None
 
-
-# ============================================================
-# VNIC details
-# ============================================================
 
 def _get_vnic_details(
     virtual_network_client,
     vnic_id,
 ):
     """
-    Get VNIC information.
+    Get VNIC details using VNIC OCID.
     """
 
     if not vnic_id:
         return None
 
     try:
-
-        response = virtual_network_client.get_vnic(
-            vnic_id
-        )
-
+        response = virtual_network_client.get_vnic(vnic_id)
         return response.data
 
     except Exception:
-
         return None
 
-
-# ============================================================
-# Availability Domains
-# ============================================================
-
-def _get_availability_domains(
-    config,
-    region,
-):
-    """
-    Get Availability Domains for the region.
-
-    OCI requires availability_domain when calling
-    list_boot_volume_attachments().
-    """
-
-    tenancy_id = config.get("tenancy_id")
-
-    if not tenancy_id:
-        print(
-            "    WARNING: tenancy_id not found in config"
-        )
-        return []
-
-    try:
-
-        identity_client = oci.identity.IdentityClient(
-            config
-        )
-
-        identity_client.base_client.set_region(
-            region
-        )
-
-        response = (
-            oci.pagination.list_call_get_all_results(
-                identity_client.list_availability_domains,
-                compartment_id=tenancy_id,
-            )
-        )
-
-        availability_domains = []
-
-        for ad in response.data:
-
-            ad_name = _get(
-                ad,
-                "name",
-                "",
-            )
-
-            if ad_name:
-                availability_domains.append(
-                    ad_name
-                )
-
-        return availability_domains
-
-    except Exception as exc:
-
-        print(
-            f"    WARNING collecting Availability "
-            f"Domains for region {region}: {exc}"
-        )
-
-        return []
-
-
-# ============================================================
-# Boot Volume Attachments
-# ============================================================
 
 def _get_boot_volume_attachments(
     compute_client,
     compartment_id,
-    availability_domains,
+    availability_domain,
 ):
     """
-    Get Boot Volume attachments for a compartment.
-
-    OCI requires availability_domain for
-    list_boot_volume_attachments().
+    Get Boot Volume attachments for a compartment and
+    availability domain.
 
     Returns:
 
@@ -197,122 +71,112 @@ def _get_boot_volume_attachments(
 
     result = {}
 
-    for availability_domain in availability_domains:
+    if not availability_domain:
+        return result
 
-        try:
+    try:
 
-            response = (
-                oci.pagination.list_call_get_all_results(
-                    compute_client.list_boot_volume_attachments,
-                    availability_domain=availability_domain,
-                    compartment_id=compartment_id,
-                )
+        response = (
+            oci.pagination.list_call_get_all_results(
+                compute_client.list_boot_volume_attachments,
+                compartment_id=compartment_id,
+                availability_domain=availability_domain,
+            )
+        )
+
+        for attachment in response.data:
+
+            instance_id = _get(
+                attachment,
+                "instance_id",
+                "",
             )
 
-            for attachment in response.data:
-
-                instance_id = _get(
-                    attachment,
-                    "instance_id",
-                    "",
-                )
-
-                boot_volume_id = _get(
-                    attachment,
-                    "boot_volume_id",
-                    "",
-                )
-
-                if instance_id and boot_volume_id:
-
-                    result[instance_id] = (
-                        boot_volume_id
-                    )
-
-        except Exception as exc:
-
-            print(
-                f"    WARNING collecting Boot Volume "
-                f"attachments from compartment "
-                f"{compartment_id}, "
-                f"AD {availability_domain}: {exc}"
+            boot_volume_id = _get(
+                attachment,
+                "boot_volume_id",
+                "",
             )
+
+            if instance_id and boot_volume_id:
+
+                result[instance_id] = boot_volume_id
+
+    except Exception as exc:
+
+        print(
+            f"    WARNING collecting Boot Volume "
+            f"attachments from compartment "
+            f"{compartment_id}, "
+            f"AD {availability_domain}: {exc}"
+        )
 
     return result
 
 
-# ============================================================
-# Compute Collector
-# ============================================================
-
 def collect_compute(config):
     """
-    Collect OCI Compute Instances.
+    Collect OCI Compute Instances across:
+
+        - All subscribed regions
+        - All accessible compartments
+        - All availability domains
 
     Detailed information collected:
 
-    Basic
-    -----
-    Instance Name
-    OCID
-    Lifecycle State
-    Lifecycle Details
-    Time Created
+        Basic
+        -----
+        Instance Name
+        OCID
+        Lifecycle State
+        Lifecycle Details
+        Time Created
 
-    Compute
-    -------
-    Shape
-    OCPU
-    Memory GB
-    VCPU
-    Baseline OCPU Utilization
-    Processor Description
+        Compute
+        -------
+        Shape
+        OCPU
+        Memory GB
+        VCPU
+        Baseline OCPU Utilization
+        Processor Description
 
-    Networking
-    ----------
-    VNIC OCID
-    Private IP
-    Public IP
-    IPv6
-    MAC Address
-    Subnet OCID
-    Hostname
-    Private DNS Name
-    VLAN Tag
-    NIC Index
+        Networking
+        ----------
+        VNIC OCID
+        Private IP
+        Public IP
+        IPv6
+        MAC Address
+        Subnet OCID
+        Hostname
+        Private DNS Name
+        VLAN Tag
+        NIC Index
 
-    Placement
-    ---------
-    Availability Domain
-    Fault Domain
+        Placement
+        ---------
+        Availability Domain
+        Fault Domain
 
-    Image
-    -----
-    Image OCID
+        Image
+        -----
+        Image OCID
 
-    Storage
-    -------
-    Boot Volume OCID
+        Storage
+        -------
+        Boot Volume OCID
 
-    Tags
-    ----
-    Freeform Tags
-    Defined Tags
+        Tags
+        ----
+        Freeform Tags
+        Defined Tags
     """
 
     resources = []
 
-    compartments = get_compartments(
-        config
-    )
-
-    regions = get_regions(
-        config
-    )
-
-    # ========================================================
-    # Process every region
-    # ========================================================
+    compartments = get_compartments(config)
+    regions = get_regions(config)
 
     for region in regions:
 
@@ -320,55 +184,49 @@ def collect_compute(config):
             f"  Processing Compute region: {region}"
         )
 
+        region_config = config.copy()
+        region_config["region"] = region
+
         try:
 
-            # ------------------------------------------------
-            # Compute Client
-            # ------------------------------------------------
-
-            compute_client = (
-                oci.core.ComputeClient(
-                    config
-                )
+            compute_client = oci.core.ComputeClient(
+                region_config
             )
-
-            compute_client.base_client.set_region(
-                region
-            )
-
-            # ------------------------------------------------
-            # VCN Client
-            # ------------------------------------------------
 
             virtual_network_client = (
                 oci.core.VirtualNetworkClient(
-                    config
+                    region_config
                 )
             )
 
-            virtual_network_client.base_client.set_region(
-                region
-            )
-
-            # ------------------------------------------------
+            # -------------------------------------------------
             # Get Availability Domains
-            # ------------------------------------------------
+            # -------------------------------------------------
+
+            tenancy_id = config.get("tenancy")
+
+            if not tenancy_id:
+                print(
+                    "    ERROR: tenancy OCID not found in config"
+                )
+                continue
+
+            identity_client = (
+                oci.identity.IdentityClient(
+                    region_config
+                )
+            )
 
             availability_domains = (
-                _get_availability_domains(
-                    config,
-                    region,
+                oci.pagination.list_call_get_all_results(
+                    identity_client.list_availability_domains,
+                    compartment_id=tenancy_id,
                 )
-            )
+            ).data
 
-            print(
-                f"    Availability Domains found: "
-                f"{len(availability_domains)}"
-            )
-
-            # =================================================
+            # -------------------------------------------------
             # Process Compartments
-            # =================================================
+            # -------------------------------------------------
 
             for compartment in compartments:
 
@@ -376,10 +234,7 @@ def collect_compute(config):
                     compartment,
                     "id",
                     compartment
-                    if isinstance(
-                        compartment,
-                        str
-                    )
+                    if isinstance(compartment, str)
                     else None,
                 )
 
@@ -392,27 +247,40 @@ def collect_compute(config):
                 if not compartment_id:
                     continue
 
-                # =================================================
-                # Get Boot Volume Attachments
-                # =================================================
+                # -------------------------------------------------
+                # Get Boot Volume Attachments for every AD
+                # -------------------------------------------------
 
-                boot_volume_map = (
-                    _get_boot_volume_attachments(
-                        compute_client,
-                        compartment_id,
-                        availability_domains,
+                boot_volume_attachments = {}
+
+                for availability_domain in availability_domains:
+
+                    ad_name = _get(
+                        availability_domain,
+                        "name",
+                        "",
                     )
-                )
 
-                # =================================================
+                    attachments = (
+                        _get_boot_volume_attachments(
+                            compute_client,
+                            compartment_id,
+                            ad_name,
+                        )
+                    )
+
+                    boot_volume_attachments.update(
+                        attachments
+                    )
+
+                # -------------------------------------------------
                 # Get Compute Instances
-                # =================================================
+                # -------------------------------------------------
 
                 try:
 
                     instances = (
-                        oci.pagination
-                        .list_call_get_all_results(
+                        oci.pagination.list_call_get_all_results(
                             compute_client.list_instances,
                             compartment_id=compartment_id,
                         ).data
@@ -428,17 +296,13 @@ def collect_compute(config):
 
                     continue
 
-                # =================================================
+                # -------------------------------------------------
                 # Process Instances
-                # =================================================
+                # -------------------------------------------------
 
                 for instance in instances:
 
                     try:
-
-                        # -----------------------------------------
-                        # Basic Instance Information
-                        # -----------------------------------------
 
                         instance_id = _get(
                             instance,
@@ -452,28 +316,6 @@ def collect_compute(config):
                             "",
                         )
 
-                        lifecycle_state = _get(
-                            instance,
-                            "lifecycle_state",
-                            "",
-                        )
-
-                        lifecycle_details = _get(
-                            instance,
-                            "lifecycle_details",
-                            "",
-                        )
-
-                        time_created = _get(
-                            instance,
-                            "time_created",
-                            None,
-                        )
-
-                        # -----------------------------------------
-                        # Shape
-                        # -----------------------------------------
-
                         shape = _get(
                             instance,
                             "shape",
@@ -485,6 +327,10 @@ def collect_compute(config):
                             "shape_config",
                             None,
                         )
+
+                        # -------------------------------------------------
+                        # Shape information
+                        # -------------------------------------------------
 
                         ocpus = _get(
                             shape_config,
@@ -516,9 +362,9 @@ def collect_compute(config):
                             None,
                         )
 
-                        # -----------------------------------------
-                        # Get shape details if necessary
-                        # -----------------------------------------
+                        # -------------------------------------------------
+                        # Fallback to Shape API
+                        # -------------------------------------------------
 
                         if (
                             ocpus is None
@@ -559,28 +405,15 @@ def collect_compute(config):
                                         None,
                                     )
 
-                        # -----------------------------------------
-                        # Primary VNIC
-                        # -----------------------------------------
-
-                        # OCI Compute Instance normally exposes
-                        # primary_vnic_id.
-                        #
-                        # Keep vnic_id as fallback for compatibility.
+                        # -------------------------------------------------
+                        # VNIC
+                        # -------------------------------------------------
 
                         vnic_id = _get(
                             instance,
-                            "primary_vnic_id",
+                            "vnic_id",
                             None,
                         )
-
-                        if not vnic_id:
-
-                            vnic_id = _get(
-                                instance,
-                                "vnic_id",
-                                None,
-                            )
 
                         private_ip = ""
                         public_ip = ""
@@ -593,17 +426,11 @@ def collect_compute(config):
                         vlan_tag = ""
                         nic_index = ""
 
-                        # -----------------------------------------
-                        # VNIC Details
-                        # -----------------------------------------
-
                         if vnic_id:
 
-                            vnic = (
-                                _get_vnic_details(
-                                    virtual_network_client,
-                                    vnic_id,
-                                )
+                            vnic = _get_vnic_details(
+                                virtual_network_client,
+                                vnic_id,
                             )
 
                             if vnic:
@@ -668,227 +495,244 @@ def collect_compute(config):
                                     "",
                                 )
 
-                        # -----------------------------------------
+                        # -------------------------------------------------
                         # Boot Volume
-                        # -----------------------------------------
+                        # -------------------------------------------------
 
-                        boot_volume_id = (
-                            boot_volume_map.get(
-                                instance_id,
-                                ""
+                        boot_volume_id = _get(
+                            instance,
+                            "boot_volume_id",
+                            "",
+                        )
+
+                        if not boot_volume_id:
+
+                            boot_volume_id = (
+                                boot_volume_attachments.get(
+                                    instance_id,
+                                    "",
+                                )
                             )
-                        )
 
-                        # -----------------------------------------
+                        # -------------------------------------------------
                         # Resource
-                        # -----------------------------------------
+                        # -------------------------------------------------
 
-                        resource = {
+                        resource = Resource(
 
-                            # ------------------------------
-                            # General
-                            # ------------------------------
+                            service="Compute",
 
-                            "service":
-                                "Compute",
+                            resource_type="Instance",
 
-                            "resource_type":
-                                "Instance",
+                            name=display_name,
 
-                            "name":
-                                display_name,
+                            ocid=instance_id,
 
-                            "display_name":
-                                display_name,
+                            compartment_id=compartment_id,
 
-                            "ocid":
-                                instance_id,
+                            compartment_name=compartment_name,
 
-                            "id":
-                                instance_id,
+                            region=region,
 
-                            "region":
-                                region,
+                            state=_get(
+                                instance,
+                                "lifecycle_state",
+                                "",
+                            ),
 
-                            "compartment_id":
-                                compartment_id,
+                            time_created=_get(
+                                instance,
+                                "time_created",
+                                None,
+                            ),
 
-                            "compartment_name":
-                                compartment_name,
+                            defined_tags=_get(
+                                instance,
+                                "defined_tags",
+                                {},
+                            ),
 
-                            "state":
-                                lifecycle_state,
+                            details={
 
-                            "lifecycle_state":
-                                lifecycle_state,
+                                # -----------------------------------------
+                                # Basic
+                                # -----------------------------------------
 
-                            "lifecycle_details":
-                                lifecycle_details,
+                                "display_name":
+                                    display_name,
 
-                            "time_created":
-                                time_created,
+                                "lifecycle_state":
+                                    _get(
+                                        instance,
+                                        "lifecycle_state",
+                                        "",
+                                    ),
 
-                            # ------------------------------
-                            # Tags
-                            # ------------------------------
+                                "lifecycle_details":
+                                    _get(
+                                        instance,
+                                        "lifecycle_details",
+                                        "",
+                                    ),
 
-                            "defined_tags":
-                                _get(
-                                    instance,
-                                    "defined_tags",
-                                    {},
-                                ),
+                                # -----------------------------------------
+                                # Compute
+                                # -----------------------------------------
 
-                            "freeform_tags":
-                                _get(
-                                    instance,
-                                    "freeform_tags",
-                                    {},
-                                ),
+                                "shape":
+                                    shape,
 
-                            # ------------------------------
-                            # Compute
-                            # ------------------------------
+                                "ocpu":
+                                    ocpus,
 
-                            "shape":
-                                shape,
+                                "ocpus":
+                                    ocpus,
 
-                            "ocpu":
-                                ocpus,
+                                "memory_gb":
+                                    memory_in_gbs,
 
-                            "ocpus":
-                                ocpus,
+                                "memory_in_gbs":
+                                    memory_in_gbs,
 
-                            "memory_gb":
-                                memory_in_gbs,
+                                "vcpus":
+                                    vcpus,
 
-                            "memory_in_gbs":
-                                memory_in_gbs,
+                                "vcpu":
+                                    vcpus,
 
-                            "vcpus":
-                                vcpus,
+                                "baseline_ocpu_utilization":
+                                    baseline_ocpu_utilization,
 
-                            "vcpu":
-                                vcpus,
+                                "processor_description":
+                                    processor_description,
 
-                            "baseline_ocpu_utilization":
-                                baseline_ocpu_utilization,
+                                # -----------------------------------------
+                                # Networking
+                                # -----------------------------------------
 
-                            "processor_description":
-                                processor_description,
+                                "private_ip":
+                                    private_ip,
 
-                            # ------------------------------
-                            # Networking
-                            # ------------------------------
+                                "public_ip":
+                                    public_ip,
 
-                            "private_ip":
-                                private_ip,
+                                "ipv6_address":
+                                    ipv6_address,
 
-                            "public_ip":
-                                public_ip,
+                                "vnic_id":
+                                    vnic_id,
 
-                            "ipv6_address":
-                                ipv6_address,
+                                "vnic_ocid":
+                                    vnic_id,
 
-                            "vnic_id":
-                                vnic_id,
+                                "mac_address":
+                                    mac_address,
 
-                            "vnic_ocid":
-                                vnic_id,
+                                "subnet_id":
+                                    subnet_id,
 
-                            "mac_address":
-                                mac_address,
+                                "subnet_ocid":
+                                    subnet_id,
 
-                            "subnet_id":
-                                subnet_id,
+                                "hostname":
+                                    hostname,
 
-                            "subnet_ocid":
-                                subnet_id,
+                                "hostname_label":
+                                    hostname_label,
 
-                            "hostname":
-                                hostname,
+                                "private_dns_name":
+                                    private_dns_name,
 
-                            "hostname_label":
-                                hostname_label,
+                                "vlan_tag":
+                                    vlan_tag,
 
-                            "private_dns_name":
-                                private_dns_name,
+                                "nic_index":
+                                    nic_index,
 
-                            "vlan_tag":
-                                vlan_tag,
+                                # -----------------------------------------
+                                # Image
+                                # -----------------------------------------
 
-                            "nic_index":
-                                nic_index,
+                                "image_id":
+                                    _get(
+                                        instance,
+                                        "image_id",
+                                        "",
+                                    ),
 
-                            # ------------------------------
-                            # Image
-                            # ------------------------------
+                                "image_ocid":
+                                    _get(
+                                        instance,
+                                        "image_id",
+                                        "",
+                                    ),
 
-                            "image_id":
-                                _get(
-                                    instance,
-                                    "image_id",
-                                    "",
-                                ),
+                                # -----------------------------------------
+                                # Placement
+                                # -----------------------------------------
 
-                            "image_ocid":
-                                _get(
-                                    instance,
-                                    "image_id",
-                                    "",
-                                ),
+                                "availability_domain":
+                                    _get(
+                                        instance,
+                                        "availability_domain",
+                                        "",
+                                    ),
 
-                            # ------------------------------
-                            # Placement
-                            # ------------------------------
+                                "fault_domain":
+                                    _get(
+                                        instance,
+                                        "fault_domain",
+                                        "",
+                                    ),
 
-                            "availability_domain":
-                                _get(
-                                    instance,
-                                    "availability_domain",
-                                    "",
-                                ),
+                                # -----------------------------------------
+                                # Storage
+                                # -----------------------------------------
 
-                            "fault_domain":
-                                _get(
-                                    instance,
-                                    "fault_domain",
-                                    "",
-                                ),
+                                "boot_volume_id":
+                                    boot_volume_id,
 
-                            # ------------------------------
-                            # Storage
-                            # ------------------------------
+                                "boot_volume_ocid":
+                                    boot_volume_id,
 
-                            "boot_volume_id":
-                                boot_volume_id,
+                                # -----------------------------------------
+                                # Other
+                                # -----------------------------------------
 
-                            "boot_volume_ocid":
-                                boot_volume_id,
+                                "launch_mode":
+                                    _get(
+                                        instance,
+                                        "launch_mode",
+                                        "",
+                                    ),
 
-                            # ------------------------------
-                            # Other
-                            # ------------------------------
+                                # -----------------------------------------
+                                # Tags
+                                # -----------------------------------------
 
-                            "launch_mode":
-                                _get(
-                                    instance,
-                                    "launch_mode",
-                                    "",
-                                ),
-                        }
+                                "defined_tags":
+                                    _get(
+                                        instance,
+                                        "defined_tags",
+                                        {},
+                                    ),
 
-                        resources.append(
-                            resource
+                                "freeform_tags":
+                                    _get(
+                                        instance,
+                                        "freeform_tags",
+                                        {},
+                                    ),
+                            },
                         )
+
+                        resources.append(resource)
 
                     except Exception as exc:
 
                         print(
-                            f"    ERROR processing "
-                            f"Compute instance "
-                            f"{_get(instance, 'display_name', '')}: "
-                            f"{exc}"
+                            f"    ERROR processing Compute "
+                            f"instance {display_name}: {exc}"
                         )
 
         except Exception as exc:
@@ -897,5 +741,9 @@ def collect_compute(config):
                 f"  ERROR collecting Compute "
                 f"region {region}: {exc}"
             )
+
+    print(
+        f"Compute: {len(resources)} resources found"
+    )
 
     return resources
