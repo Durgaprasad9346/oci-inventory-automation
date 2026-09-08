@@ -31,14 +31,18 @@ def _to_dict(obj):
         return obj
 
     try:
+
         if hasattr(obj, "to_dict"):
             return obj.to_dict()
+
     except Exception:
         pass
 
     try:
+
         if hasattr(obj, "__dict__"):
             return obj.__dict__
+
     except Exception:
         pass
 
@@ -53,7 +57,7 @@ def collect_boot_volume(config):
         - All accessible compartments
         - All availability domains
 
-    Collects important Boot Volume information including:
+    Collects:
 
         Basic:
         - Name
@@ -62,6 +66,7 @@ def collect_boot_volume(config):
         - Region
         - Availability Domain
         - Lifecycle State
+        - Lifecycle Details
         - Creation Time
 
         Storage:
@@ -96,10 +101,6 @@ def collect_boot_volume(config):
     # =============================================================
     # TENANCY OCID
     # =============================================================
-    #
-    # OCI config normally uses "tenancy", not "tenancy_id".
-    #
-    # =============================================================
 
     tenancy_id = config.get("tenancy")
 
@@ -131,8 +132,10 @@ def collect_boot_volume(config):
 
         try:
 
-            blockstorage_client = oci.core.BlockstorageClient(
-                region_config
+            blockstorage_client = (
+                oci.core.BlockstorageClient(
+                    region_config
+                )
             )
 
         except Exception as error:
@@ -150,8 +153,10 @@ def collect_boot_volume(config):
 
         try:
 
-            identity_client = oci.identity.IdentityClient(
-                region_config
+            identity_client = (
+                oci.identity.IdentityClient(
+                    region_config
+                )
             )
 
             availability_domains = (
@@ -195,6 +200,9 @@ def collect_boot_volume(config):
                     "",
                 )
 
+                if not ad_name:
+                    continue
+
                 try:
 
                     # =================================================
@@ -228,21 +236,21 @@ def collect_boot_volume(config):
 
                 for boot_volume in boot_volumes:
 
+                    display_name = _get(
+                        boot_volume,
+                        "display_name",
+                        "",
+                    )
+
                     try:
 
                         # =================================================
-                        # BASIC INFORMATION
+                        # BASIC
                         # =================================================
 
                         boot_volume_id = _get(
                             boot_volume,
                             "id",
-                            "",
-                        )
-
-                        display_name = _get(
-                            boot_volume,
-                            "display_name",
                             "",
                         )
 
@@ -264,8 +272,14 @@ def collect_boot_volume(config):
                             None,
                         )
 
+                        actual_compartment_id = _get(
+                            boot_volume,
+                            "compartment_id",
+                            compartment_id,
+                        )
+
                         # =================================================
-                        # STORAGE INFORMATION
+                        # STORAGE
                         # =================================================
 
                         size_in_gbs = _get(
@@ -287,7 +301,7 @@ def collect_boot_volume(config):
                         )
 
                         # =================================================
-                        # SOURCE INFORMATION
+                        # SOURCE
                         # =================================================
 
                         source_type = _get(
@@ -363,7 +377,7 @@ def collect_boot_volume(config):
                         details = {
 
                             # ---------------------------------------------
-                            # BASIC
+                            # Basic
                             # ---------------------------------------------
 
                             "availability_domain":
@@ -376,7 +390,7 @@ def collect_boot_volume(config):
                                 lifecycle_details,
 
                             # ---------------------------------------------
-                            # STORAGE
+                            # Storage
                             # ---------------------------------------------
 
                             "size_in_gbs":
@@ -398,7 +412,7 @@ def collect_boot_volume(config):
                                 volume_group_id,
 
                             # ---------------------------------------------
-                            # SOURCE
+                            # Source
                             # ---------------------------------------------
 
                             "source_type":
@@ -411,7 +425,7 @@ def collect_boot_volume(config):
                                 source_volume_backup_id,
 
                             # ---------------------------------------------
-                            # ENCRYPTION
+                            # Encryption
                             # ---------------------------------------------
 
                             "kms_key_id":
@@ -421,20 +435,22 @@ def collect_boot_volume(config):
                                 bool(kms_key_id),
 
                             # ---------------------------------------------
-                            # CONFIGURATION
+                            # Configuration
                             # ---------------------------------------------
 
                             "is_hydrated":
                                 is_hydrated,
 
                             "autotune_policies":
-                                _to_dict(autotune_policies),
+                                _to_dict(
+                                    autotune_policies
+                                ),
 
                             "policy":
                                 policy,
 
                             # ---------------------------------------------
-                            # TAGS
+                            # Tags
                             # ---------------------------------------------
 
                             "defined_tags":
@@ -446,6 +462,15 @@ def collect_boot_volume(config):
 
                         # =================================================
                         # RESOURCE OBJECT
+                        # =================================================
+                        #
+                        # IMPORTANT:
+                        #
+                        # Do NOT pass freeform_tags directly to Resource.
+                        # Your current Resource constructor rejects it.
+                        #
+                        # freeform_tags remains available inside details.
+                        #
                         # =================================================
 
                         resource = Resource(
@@ -459,11 +484,7 @@ def collect_boot_volume(config):
                             ocid=boot_volume_id,
 
                             compartment_id=(
-                                _get(
-                                    boot_volume,
-                                    "compartment_id",
-                                    compartment_id,
-                                )
+                                actual_compartment_id
                             ),
 
                             compartment_name=(
@@ -477,8 +498,6 @@ def collect_boot_volume(config):
                             time_created=time_created,
 
                             defined_tags=defined_tags,
-
-                            freeform_tags=freeform_tags,
 
                             details=details,
                         )
