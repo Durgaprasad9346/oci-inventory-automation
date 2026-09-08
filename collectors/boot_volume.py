@@ -1,7 +1,7 @@
 import oci
 
 
-def collect_boot_volumes(config):
+def collect_boot_volume(config):
     """
     Collect OCI Boot Volumes across configured regions and compartments.
     """
