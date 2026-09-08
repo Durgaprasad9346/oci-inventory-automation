@@ -1,5 +1,9 @@
 import oci
 
+from collectors.base import Resource
+from utils.compartments import get_compartments
+from utils.regions import get_regions
+
 
 def _get(obj, name, default=None):
     """
@@ -16,7 +20,7 @@ def _get(obj, name, default=None):
 
 def _safe_dict(obj):
     """
-    Convert OCI SDK object to dictionary when possible.
+    Safely convert OCI SDK objects into dictionaries.
     """
     if obj is None:
         return {}
@@ -33,44 +37,81 @@ def _safe_dict(obj):
     return {}
 
 
+def _safe_value(value):
+    """
+    Convert OCI SDK objects/lists/dicts into Excel-safe values.
+    Prevents openpyxl errors caused by OCI SDK objects.
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, dict):
+        result = {}
+
+        for key, val in value.items():
+            result[str(key)] = _safe_value(val)
+
+        return result
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _safe_value(item)
+            for item in value
+        ]
+
+    try:
+        if hasattr(value, "to_dict"):
+            return _safe_value(
+                value.to_dict()
+            )
+    except Exception:
+        pass
+
+    return str(value)
+
+
 def collect_block_volume(config):
     """
-    Collect OCI Block Volumes.
+    Collect OCI Block Volumes across:
 
-    Important details collected:
+        - All subscribed regions
+        - All accessible compartments
 
-    - Display Name
-    - OCID
-    - Size in GB
-    - Volume Type
-    - VPUs per GB
-    - Lifecycle State
-    - Availability Domain
-    - Compartment
-    - Encryption
-    - KMS Key
-    - Source Volume
-    - Source Type
-    - Backup Policy
-    - Volume Group
-    - Replica Information
-    - Read Only
-    - Shareable
-    - Time Created
-    - Tags
+    Important inventory details:
+
+        - Display Name
+        - OCID
+        - Size in GB
+        - Size in MB
+        - Volume Type
+        - VPUs per GB
+        - Performance
+        - Lifecycle State
+        - Availability Domain
+        - Compartment
+        - Time Created
+        - Encryption
+        - KMS Key
+        - Source Volume
+        - Source Type
+        - Backup Policy
+        - Volume Group
+        - Replica information
+        - Read Only
+        - Shareable
+        - Hydrated
+        - Auto Tune
+        - Tags
     """
 
     resources = []
 
-    regions = config.get(
-        "regions",
-        []
-    )
-
-    compartments = config.get(
-        "compartments",
-        []
-    )
+    compartments = get_compartments(config)
+    regions = get_regions(config)
 
     for region in regions:
 
@@ -78,489 +119,325 @@ def collect_block_volume(config):
             f"  Processing Block Volume region: {region}"
         )
 
+        region_config = config.copy()
+        region_config["region"] = region
+
         try:
 
             blockstorage_client = (
                 oci.core.BlockstorageClient(
-                    config
+                    region_config
                 )
             )
 
-            blockstorage_client.base_client.set_region(
-                region
+        except Exception as error:
+
+            print(
+                f"    ERROR creating Block Storage client "
+                f"for region {region}: {error}"
             )
 
-            for compartment in compartments:
+            continue
 
-                compartment_id = _get(
-                    compartment,
-                    "id",
-                    compartment
-                    if isinstance(compartment, str)
-                    else None
+        for compartment in compartments:
+
+            compartment_id = _get(
+                compartment,
+                "id",
+                ""
+            )
+
+            compartment_name = _get(
+                compartment,
+                "name",
+                compartment_id
+            )
+
+            if not compartment_id:
+                continue
+
+            try:
+
+                response = (
+                    oci.pagination.list_call_get_all_results(
+                        blockstorage_client.list_volumes,
+                        compartment_id=compartment_id
+                    )
                 )
 
-                compartment_name = _get(
-                    compartment,
-                    "name",
-                    ""
+                volumes = response.data
+
+            except Exception as error:
+
+                print(
+                    f"    ERROR collecting Block Volumes "
+                    f"from compartment "
+                    f"{compartment_name}: {error}"
                 )
 
-                if not compartment_id:
-                    continue
+                continue
+
+            for volume in volumes:
 
                 try:
 
-                    response = (
-                        oci.pagination.list_call_get_all_results(
-                            blockstorage_client.list_volumes,
-                            compartment_id=compartment_id
-                        )
+                    volume_id = _get(
+                        volume,
+                        "id",
+                        ""
                     )
 
-                    volumes = response.data
-
-                except Exception as exc:
-
-                    print(
-                        f"    ERROR collecting Block Volumes "
-                        f"from compartment "
-                        f"{compartment_name}: {exc}"
+                    display_name = _get(
+                        volume,
+                        "display_name",
+                        ""
                     )
 
-                    continue
+                    lifecycle_state = _get(
+                        volume,
+                        "lifecycle_state",
+                        ""
+                    )
 
-                for volume in volumes:
+                    availability_domain = _get(
+                        volume,
+                        "availability_domain",
+                        ""
+                    )
 
-                    try:
+                    size_in_gbs = _get(
+                        volume,
+                        "size_in_gbs",
+                        ""
+                    )
 
-                        volume_id = _get(
-                            volume,
-                            "id",
-                            ""
-                        )
+                    size_in_mbs = _get(
+                        volume,
+                        "size_in_mbs",
+                        ""
+                    )
 
-                        display_name = _get(
-                            volume,
-                            "display_name",
-                            ""
-                        )
+                    vpus_per_gb = _get(
+                        volume,
+                        "vpus_per_gb",
+                        ""
+                    )
 
-                        lifecycle_state = _get(
-                            volume,
-                            "lifecycle_state",
-                            ""
-                        )
+                    volume_type = _get(
+                        volume,
+                        "volume_type",
+                        ""
+                    )
 
-                        size_in_gbs = _get(
-                            volume,
-                            "size_in_gbs",
-                            None
-                        )
+                    time_created = _get(
+                        volume,
+                        "time_created",
+                        None
+                    )
 
-                        size_in_mbs = _get(
-                            volume,
-                            "size_in_mbs",
-                            None
-                        )
+                    is_hydrated = _get(
+                        volume,
+                        "is_hydrated",
+                        ""
+                    )
 
-                        vpus_per_gb = _get(
-                            volume,
-                            "vpus_per_gb",
-                            None
-                        )
+                    is_reservable = _get(
+                        volume,
+                        "is_reservable",
+                        ""
+                    )
 
-                        volume_type = _get(
-                            volume,
-                            "volume_type",
-                            ""
-                        )
+                    is_read_only = _get(
+                        volume,
+                        "is_read_only",
+                        ""
+                    )
 
-                        availability_domain = _get(
-                            volume,
-                            "availability_domain",
-                            ""
-                        )
+                    is_volume_group_clone = _get(
+                        volume,
+                        "is_volume_group_clone",
+                        ""
+                    )
 
-                        time_created = _get(
-                            volume,
-                            "time_created",
-                            None
-                        )
+                    is_auto_tune_enabled = _get(
+                        volume,
+                        "is_auto_tune_enabled",
+                        ""
+                    )
 
-                        is_hydrated = _get(
-                            volume,
-                            "is_hydrated",
-                            None
-                        )
+                    kms_key_id = _get(
+                        volume,
+                        "kms_key_id",
+                        ""
+                    )
 
-                        is_reservable = _get(
-                            volume,
-                            "is_reservable",
-                            None
-                        )
+                    volume_group_id = _get(
+                        volume,
+                        "volume_group_id",
+                        ""
+                    )
 
-                        is_read_only = _get(
-                            volume,
-                            "is_read_only",
-                            None
-                        )
+                    source_details = _get(
+                        volume,
+                        "source_details",
+                        None
+                    )
 
-                        is_volume_group_clone = _get(
-                            volume,
-                            "is_volume_group_clone",
-                            None
-                        )
+                    block_volume_replicas = _get(
+                        volume,
+                        "block_volume_replicas",
+                        None
+                    )
 
-                        is_auto_tune_enabled = _get(
-                            volume,
-                            "is_auto_tune_enabled",
-                            None
-                        )
+                    autotune_policies = _get(
+                        volume,
+                        "autotune_policies",
+                        None
+                    )
 
-                        auto_tuned_vpus_per_gb = _get(
-                            volume,
-                            "auto_tuned_vpus_per_gb",
-                            None
-                        )
+                    backup_policy_id = _get(
+                        volume,
+                        "backup_policy_id",
+                        ""
+                    )
 
-                        size_in_gbs = (
-                            size_in_gbs
-                            if size_in_gbs is not None
-                            else ""
-                        )
+                    freeform_tags = _get(
+                        volume,
+                        "freeform_tags",
+                        {}
+                    )
 
-                        size_in_mbs = (
-                            size_in_mbs
-                            if size_in_mbs is not None
-                            else ""
-                        )
+                    defined_tags = _get(
+                        volume,
+                        "defined_tags",
+                        {}
+                    )
 
-                        vpus_per_gb = (
-                            vpus_per_gb
-                            if vpus_per_gb is not None
-                            else ""
-                        )
+                    # ------------------------------------------------
+                    # Create common Resource object
+                    # ------------------------------------------------
 
-                        # ------------------------------------------------
-                        # ENCRYPTION
-                        # ------------------------------------------------
+                    resource = Resource(
 
-                        kms_key_id = _get(
-                            volume,
-                            "kms_key_id",
-                            ""
-                        )
+                        service="Block Storage",
 
-                        encryption_in_transit_type = _get(
-                            volume,
-                            "encryption_in_transit_type",
-                            ""
-                        )
+                        resource_type="Block Volume",
 
-                        # ------------------------------------------------
-                        # SOURCE DETAILS
-                        # ------------------------------------------------
+                        name=display_name,
 
-                        source_details = _get(
-                            volume,
-                            "source_details",
-                            None
-                        )
+                        ocid=volume_id,
 
-                        source_dict = _safe_dict(
-                            source_details
-                        )
+                        compartment_id=compartment_id,
 
-                        source_type = _get(
-                            source_details,
-                            "type",
-                            source_dict.get(
-                                "type",
-                                ""
-                            )
-                        )
+                        compartment_name=compartment_name,
 
-                        source_volume_id = _get(
-                            source_details,
-                            "id",
-                            source_dict.get(
-                                "id",
-                                ""
-                            )
-                        )
+                        region=region,
 
-                        source_volume_size = _get(
-                            source_details,
-                            "size_in_gbs",
-                            source_dict.get(
-                                "size_in_gbs",
-                                ""
-                            )
-                        )
+                        state=lifecycle_state,
 
-                        # ------------------------------------------------
-                        # BACKUP POLICY
-                        # ------------------------------------------------
+                        time_created=time_created,
 
-                        backup_policy_id = ""
+                        defined_tags=_safe_value(
+                            defined_tags
+                        ),
 
-                        try:
+                        details={
 
-                            backup_policy_assignments = (
-                                oci.pagination.list_call_get_all_results(
-                                    blockstorage_client.list_volume_backup_policy_assignments,
-                                    asset_id=volume_id
-                                ).data
-                            )
-
-                            if backup_policy_assignments:
-
-                                assignment = (
-                                    backup_policy_assignments[0]
-                                )
-
-                                backup_policy_id = _get(
-                                    assignment,
-                                    "policy_id",
-                                    ""
-                                )
-
-                        except Exception:
-                            backup_policy_id = ""
-
-                        # ------------------------------------------------
-                        # VOLUME GROUP
-                        # ------------------------------------------------
-
-                        volume_group_id = _get(
-                            volume,
-                            "volume_group_id",
-                            ""
-                        )
-
-                        # ------------------------------------------------
-                        # REPLICA DETAILS
-                        # ------------------------------------------------
-
-                        block_volume_replicas = []
-
-                        try:
-
-                            replicas_response = (
-                                blockstorage_client.list_block_volume_replicas(
-                                    block_volume_id=volume_id
-                                )
-                            )
-
-                            replicas = replicas_response.data
-
-                            for replica in replicas:
-
-                                replica_data = {
-
-                                    "id": _get(
-                                        replica,
-                                        "id",
-                                        ""
-                                    ),
-
-                                    "region": _get(
-                                        replica,
-                                        "region",
-                                        ""
-                                    ),
-
-                                    "availability_domain": _get(
-                                        replica,
-                                        "availability_domain",
-                                        ""
-                                    ),
-
-                                    "lifecycle_state": _get(
-                                        replica,
-                                        "lifecycle_state",
-                                        ""
-                                    ),
-
-                                    "time_created": _get(
-                                        replica,
-                                        "time_created",
-                                        None
-                                    )
-                                }
-
-                                block_volume_replicas.append(
-                                    replica_data
-                                )
-
-                        except Exception:
-                            block_volume_replicas = []
-
-                        # ------------------------------------------------
-                        # TAGS
-                        #
-                        # Do NOT pass these into OCI constructors.
-                        # We only read them from the returned object.
-                        # ------------------------------------------------
-
-                        defined_tags = _get(
-                            volume,
-                            "defined_tags",
-                            {}
-                        )
-
-                        freeform_tags = _get(
-                            volume,
-                            "freeform_tags",
-                            {}
-                        )
-
-                        # ------------------------------------------------
-                        # RESOURCE
-                        # ------------------------------------------------
-
-                        resource = {
-
-                            # Basic
-                            "service":
-                                "Block Storage",
-
-                            "resource_type":
-                                "Block Volume",
-
-                            "name":
-                                display_name,
+                            # ----------------------------------------
+                            # Basic information
+                            # ----------------------------------------
 
                             "display_name":
                                 display_name,
 
-                            "id":
+                            "volume_id":
                                 volume_id,
-
-                            "ocid":
-                                volume_id,
-
-                            # Location
-                            "region":
-                                region,
 
                             "availability_domain":
                                 availability_domain,
 
-                            "compartment_id":
-                                compartment_id,
-
-                            "compartment_name":
-                                compartment_name,
-
-                            # State
                             "lifecycle_state":
                                 lifecycle_state,
 
-                            "state":
-                                lifecycle_state,
-
-                            # ------------------------------------------------
-                            # SIZE
-                            # ------------------------------------------------
-
                             "size_in_gbs":
-                                size_in_gbs,
-
-                            "size_gb":
-                                size_in_gbs,
-
-                            "size":
                                 size_in_gbs,
 
                             "size_in_mbs":
                                 size_in_mbs,
 
-                            "volume_size_gb":
-                                size_in_gbs,
-
-                            "volume_size":
-                                size_in_gbs,
-
-                            # ------------------------------------------------
-                            # PERFORMANCE
-                            # ------------------------------------------------
+                            "volume_type":
+                                volume_type,
 
                             "vpus_per_gb":
                                 vpus_per_gb,
 
-                            "vpu_per_gb":
+                            "performance_vpus_per_gb":
                                 vpus_per_gb,
 
-                            "vp_us_per_gb":
-                                vpus_per_gb,
+                            # ----------------------------------------
+                            # Creation
+                            # ----------------------------------------
 
-                            "auto_tuned_vpus_per_gb":
-                                auto_tuned_vpus_per_gb,
+                            "time_created":
+                                time_created,
 
-                            "is_auto_tune_enabled":
-                                is_auto_tune_enabled,
-
-                            # ------------------------------------------------
-                            # VOLUME TYPE
-                            # ------------------------------------------------
-
-                            "volume_type":
-                                volume_type,
-
-                            # ------------------------------------------------
-                            # ENCRYPTION
-                            # ------------------------------------------------
+                            # ----------------------------------------
+                            # Encryption
+                            # ----------------------------------------
 
                             "kms_key_id":
                                 kms_key_id,
 
-                            "kms_key_ocid":
-                                kms_key_id,
-
-                            "encryption_in_transit_type":
-                                encryption_in_transit_type,
-
-                            # ------------------------------------------------
-                            # SOURCE
-                            # ------------------------------------------------
-
-                            "source_type":
-                                source_type,
-
-                            "source_volume_id":
-                                source_volume_id,
-
-                            "source_volume_ocid":
-                                source_volume_id,
-
-                            "source_volume_size_gb":
-                                source_volume_size,
-
-                            # ------------------------------------------------
-                            # BACKUP
-                            # ------------------------------------------------
-
-                            "backup_policy_id":
-                                backup_policy_id,
-
-                            "backup_policy_ocid":
-                                backup_policy_id,
-
-                            # ------------------------------------------------
-                            # VOLUME GROUP
-                            # ------------------------------------------------
+                            # ----------------------------------------
+                            # Volume Group
+                            # ----------------------------------------
 
                             "volume_group_id":
                                 volume_group_id,
 
-                            "volume_group_ocid":
-                                volume_group_id,
+                            "is_volume_group_clone":
+                                is_volume_group_clone,
 
-                            # ------------------------------------------------
-                            # FLAGS
-                            # ------------------------------------------------
+                            # ----------------------------------------
+                            # Source
+                            # ----------------------------------------
+
+                            "source_details":
+                                _safe_value(
+                                    source_details
+                                ),
+
+                            # ----------------------------------------
+                            # Backup
+                            # ----------------------------------------
+
+                            "backup_policy_id":
+                                backup_policy_id,
+
+                            # ----------------------------------------
+                            # Replica
+                            # ----------------------------------------
+
+                            "block_volume_replicas":
+                                _safe_value(
+                                    block_volume_replicas
+                                ),
+
+                            # ----------------------------------------
+                            # Performance / Auto Tune
+                            # ----------------------------------------
+
+                            "is_auto_tune_enabled":
+                                is_auto_tune_enabled,
+
+                            "autotune_policies":
+                                _safe_value(
+                                    autotune_policies
+                                ),
+
+                            # ----------------------------------------
+                            # Volume properties
+                            # ----------------------------------------
 
                             "is_hydrated":
                                 is_hydrated,
@@ -571,65 +448,32 @@ def collect_block_volume(config):
                             "is_read_only":
                                 is_read_only,
 
-                            "read_only":
-                                is_read_only,
-
-                            "is_volume_group_clone":
-                                is_volume_group_clone,
-
-                            # ------------------------------------------------
-                            # REPLICATION
-                            # ------------------------------------------------
-
-                            "replicas":
-                                block_volume_replicas,
-
-                            "replica_count":
-                                len(
-                                    block_volume_replicas
-                                ),
-
-                            # ------------------------------------------------
-                            # TIME
-                            # ------------------------------------------------
-
-                            "time_created":
-                                time_created,
-
-                            "created":
-                                time_created,
-
-                            # ------------------------------------------------
-                            # TAGS
-                            # ------------------------------------------------
-
-                            "defined_tags":
-                                defined_tags,
+                            # ----------------------------------------
+                            # Tags
+                            # ----------------------------------------
 
                             "freeform_tags":
-                                freeform_tags,
+                                _safe_value(
+                                    freeform_tags
+                                ),
+
+                            "defined_tags":
+                                _safe_value(
+                                    defined_tags
+                                ),
                         }
+                    )
 
-                        resources.append(
-                            resource
-                        )
+                    resources.append(
+                        resource
+                    )
 
-                    except Exception as exc:
+                except Exception as error:
 
-                        print(
-                            f"    ERROR processing Block Volume "
-                            f"{display_name}: {exc}"
-                        )
-
-        except Exception as exc:
-
-            print(
-                f"  ERROR collecting Block Volume "
-                f"region {region}: {exc}"
-            )
-
-    print(
-        f"Block Volumes: {len(resources)} resources found"
-    )
+                    print(
+                        f"    ERROR processing Block Volume "
+                        f"{_get(volume, 'display_name', '')}: "
+                        f"{error}"
+                    )
 
     return resources
