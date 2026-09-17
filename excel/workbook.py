@@ -87,7 +87,10 @@ def _to_excel_value(value):
     if isinstance(value, date):
         return value
 
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str):
+        return _sanitize_excel_string(value)
+
+    if isinstance(value, (int, float, bool)):
         return value
 
     if isinstance(value, dict):
@@ -620,8 +623,6 @@ COMMON_COLUMNS = [
     "Lifecycle State",
     "Lifecycle Details",
     "Creation Date",
-    "Defined Tags",
-    "Freeform Tags",
 ]
 
 
@@ -1583,6 +1584,106 @@ FIELD_ALIASES = {
 
 
 # ============================================================
+# TAG COLUMNS
+# ============================================================
+
+def _flatten_tag_dict(tags, prefix=""):
+    """
+    Flatten OCI tag dictionaries into individual Excel columns.
+
+    Example:
+        {"maxlife": {"env": "prod"}}
+
+    becomes:
+        {"maxlife.env": "prod"}
+    """
+
+    result = {}
+
+    if tags is None:
+        return result
+
+    if not isinstance(tags, dict):
+        try:
+            if hasattr(tags, "to_dict"):
+                tags = tags.to_dict()
+            else:
+                tags = vars(tags)
+        except Exception:
+            return result
+
+    for key, value in tags.items():
+        key = str(key)
+        full_key = f"{prefix}.{key}" if prefix else key
+
+        if isinstance(value, dict):
+            result.update(_flatten_tag_dict(value, full_key))
+        else:
+            result[full_key] = value
+
+    return result
+
+
+def _get_tag_columns(resources):
+    """Return all tag columns used by this service, in stable order."""
+
+    defined = set()
+    freeform = set()
+
+    for resource in resources:
+        normalized = _normalize_resource(resource)
+
+        defined_tags = _resource_value(normalized, "defined_tags", {})
+        freeform_tags = _resource_value(normalized, "freeform_tags", {})
+
+        defined.update(_flatten_tag_dict(defined_tags).keys())
+        freeform.update(_flatten_tag_dict(freeform_tags).keys())
+
+    # Defined tags first, then freeform tags. Both are at the very end.
+    return (
+        [f"Defined Tag: {key}" for key in sorted(defined)]
+        + [f"Freeform Tag: {key}" for key in sorted(freeform)]
+    )
+
+
+def _get_tag_value(resource, header):
+    """Return one individual tag value for an Excel tag column."""
+
+    if header.startswith("Defined Tag: "):
+        tag_key = header[len("Defined Tag: "):]
+        tags = _resource_value(resource, "defined_tags", {})
+    elif header.startswith("Freeform Tag: "):
+        tag_key = header[len("Freeform Tag: "):]
+        tags = _resource_value(resource, "freeform_tags", {})
+    else:
+        return ""
+
+    flattened = _flatten_tag_dict(tags)
+    return flattened.get(tag_key, "")
+
+
+# ============================================================
+# EXCEL-SAFE VALUES
+# ============================================================
+
+def _sanitize_excel_string(value):
+    """Remove XML-invalid characters and enforce Excel's cell limit."""
+
+    if not isinstance(value, str):
+        return value
+
+    # XML 1.0 / Excel illegal control characters.
+    value = "".join(
+        ch for ch in value
+        if ch in ("\t", "\n", "\r")
+        or ord(ch) >= 32
+    )
+
+    # Excel has a 32,767 character cell limit.
+    return value[:32767]
+
+
+# ============================================================
 # RESOURCE DETAIL VALUE
 # ============================================================
 
@@ -2003,12 +2104,16 @@ def write_resource_sheet(
 
     ws.title = service[:31]
 
+    tag_columns = _get_tag_columns(resources)
+
+    # Tags MUST always be the final columns in every service sheet.
     columns = (
         COMMON_COLUMNS
         + SERVICE_COLUMNS.get(
             service,
             [],
         )
+        + tag_columns
     )
 
     # ---------------------------------------------------------
@@ -2049,10 +2154,6 @@ def write_resource_sheet(
 
         normalized = _normalize_resource(
             resource
-        )
-
-        defined_tags, freeform_tags = (
-            _format_tags(normalized)
         )
 
         for col_index, header in enumerate(
@@ -2158,13 +2259,15 @@ def write_resource_sheet(
                     default="",
                 )
 
-            elif header == "Defined Tags":
+            elif (
+                header.startswith("Defined Tag: ")
+                or header.startswith("Freeform Tag: ")
+            ):
 
-                value = defined_tags
-
-            elif header == "Freeform Tags":
-
-                value = freeform_tags
+                value = _get_tag_value(
+                    normalized,
+                    header,
+                )
 
             # -------------------------------------------------
             # SERVICE-SPECIFIC
@@ -2343,8 +2446,6 @@ def write_resource_sheet(
             "VNIC OCID",
             "Image OCID",
             "Boot Volume OCID",
-            "Defined Tags",
-            "Freeform Tags",
             "Security List OCIDs",
             "Route Rules",
             "Backend Sets",
@@ -2361,9 +2462,9 @@ def write_resource_sheet(
             "DDL Statement",
             "Replica Information",
             "Filesystem Snapshot Policy",
-        ):
+        ) or header.startswith("Defined Tag: ") or header.startswith("Freeform Tag: "):
 
-            width = 40
+            width = 28 if header.startswith(("Defined Tag: ", "Freeform Tag: ")) else 40
 
         ws.column_dimensions[
             get_column_letter(
@@ -2396,6 +2497,7 @@ def write_resource_sheet(
             )
         )
 
+        # Excel table names must be unique and cannot contain spaces.
         safe_name = safe_name[:240]
 
         try:
