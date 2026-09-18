@@ -12,7 +12,6 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 # ============================================================
@@ -2473,7 +2472,14 @@ def write_resource_sheet(
         ].width = width
 
     # ---------------------------------------------------------
-    # EXCEL TABLE
+    # EXCEL FILTER
+    # ---------------------------------------------------------
+    #
+    # Do NOT create openpyxl Excel Table objects here.
+    #
+    # The generated Excel Table XML was causing Microsoft Excel
+    # to show a corruption/recovery warning. AutoFilter provides
+    # the filtering functionality without creating Table XML.
     # ---------------------------------------------------------
 
     if len(resources) > 0:
@@ -2484,43 +2490,9 @@ def write_resource_sheet(
 
         last_row = len(resources) + 1
 
-        table_ref = (
+        ws.auto_filter.ref = (
             f"A1:{last_column}{last_row}"
         )
-
-        safe_name = (
-            "tbl_"
-            + "".join(
-                ch
-                for ch in service
-                if ch.isalnum()
-            )
-        )
-
-        # Excel table names must be unique and cannot contain spaces.
-        safe_name = safe_name[:240]
-
-        try:
-
-            table = Table(
-                displayName=safe_name,
-                ref=table_ref,
-            )
-
-            style = TableStyleInfo(
-                name="TableStyleMedium2",
-                showFirstColumn=False,
-                showLastColumn=False,
-                showRowStripes=True,
-                showColumnStripes=False,
-            )
-
-            table.tableStyleInfo = style
-
-            ws.add_table(table)
-
-        except Exception:
-            pass
 
 
 # ============================================================
