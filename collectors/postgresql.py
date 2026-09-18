@@ -1,94 +1,202 @@
 import oci
 
+from utils.compartments import get_compartments
+from utils.regions import get_regions
+
 
 def _get(obj, name, default=None):
     if obj is None:
         return default
+
     try:
         if isinstance(obj, dict):
             return obj.get(name, default)
+
         return getattr(obj, name, default)
+
     except Exception:
         return default
 
 
+def _safe_value(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_value(val)
+            for key, val in value.items()
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _safe_value(item)
+            for item in value
+        ]
+
+    try:
+        if hasattr(value, "to_dict"):
+            return _safe_value(value.to_dict())
+    except Exception:
+        pass
+
+    return str(value)
+
+
 def collect_postgresql(config):
     """
-    Collect OCI Database with PostgreSQL resources.
-
-    Uses the OCI PostgreSQL service client and lists DB systems
-    by configured region and compartment.
+    Collect OCI PostgreSQL DB Systems.
 
     Collects:
+
       - DB System OCID
-      - Name
+      - Display Name
       - Region
       - Compartment
-      - Lifecycle state
-      - Creation date
-      - PostgreSQL version
+      - Lifecycle State
+      - PostgreSQL Version
       - Shape
-      - CPU cores
+      - CPU Cores
       - Memory
       - Storage
       - Subnet
-      - Private/Public IP when exposed by the API model
+      - Private IP
+      - Public IP
+      - Availability Domain
+      - Creation Date
+      - KMS Key
       - Tags
     """
 
     resources = []
 
-    regions = config.get("regions", [])
-    compartments = config.get("compartments", [])
+    # ============================================================
+    # USE COMMON REGION / COMPARTMENT DISCOVERY
+    # ============================================================
+
+    regions = get_regions(config)
+    compartments = get_compartments(config)
+
+    if not regions:
+
+        print(
+            "  ERROR: No regions found for PostgreSQL."
+        )
+
+        return resources
+
+    if not compartments:
+
+        print(
+            "  ERROR: No compartments found for PostgreSQL."
+        )
+
+        return resources
+
+    # ============================================================
+    # REGIONS
+    # ============================================================
 
     for region in regions:
-        print(f"  Processing PostgreSQL region: {region}")
+
+        print(
+            f"  Processing PostgreSQL region: {region}"
+        )
+
+        region_config = config.copy()
+        region_config["region"] = region
+
+        # ========================================================
+        # POSTGRESQL CLIENT
+        # ========================================================
 
         try:
+
             client = oci.psql.PostgresqlClient(
-                config,
-                region=region,
+                region_config
             )
-        except Exception as exc:
+
+        except Exception as error:
+
             print(
                 f"  ERROR initializing PostgreSQL client "
-                f"for region {region}: {exc}"
+                f"for region {region}: {error}"
             )
+
             continue
 
+        # ========================================================
+        # COMPARTMENTS
+        # ========================================================
+
         for compartment in compartments:
+
             compartment_id = _get(
                 compartment,
                 "id",
-                compartment if isinstance(compartment, str) else None,
+                compartment
+                if isinstance(compartment, str)
+                else None,
             )
 
             compartment_name = _get(
                 compartment,
                 "name",
-                "",
+                compartment_id,
             )
 
             if not compartment_id:
                 continue
 
+            print(
+                f"    Processing PostgreSQL compartment: "
+                f"{compartment_name}"
+            )
+
+            # ====================================================
+            # LIST DB SYSTEMS
+            # ====================================================
+
             try:
-                response = oci.pagination.list_call_get_all_results(
-                    client.list_db_systems,
-                    compartment_id=compartment_id,
+
+                response = (
+                    oci.pagination.list_call_get_all_results(
+                        client.list_db_systems,
+                        compartment_id=compartment_id,
+                    )
                 )
 
                 db_systems = response.data
 
-            except Exception as exc:
+            except Exception as error:
+
                 print(
-                    f"    ERROR collecting PostgreSQL DB Systems "
-                    f"from compartment {compartment_name}: {exc}"
+                    f"      ERROR collecting PostgreSQL "
+                    f"DB Systems from compartment "
+                    f"{compartment_name}: {error}"
                 )
+
                 continue
 
+            if not db_systems:
+                continue
+
+            print(
+                f"      Found {len(db_systems)} PostgreSQL "
+                f"DB System(s)"
+            )
+
+            # ====================================================
+            # PROCESS DB SYSTEMS
+            # ====================================================
+
             for db_system in db_systems:
+
                 try:
+
                     db_system_id = _get(
                         db_system,
                         "id",
@@ -107,138 +215,419 @@ def collect_postgresql(config):
                         "",
                     )
 
+                    # =================================================
+                    # GET DETAILED DB SYSTEM
+                    # =================================================
+
+                    db_system_details = db_system
+
+                    if db_system_id:
+
+                        try:
+
+                            detail_response = (
+                                client.get_db_system(
+                                    db_system_id
+                                )
+                            )
+
+                            db_system_details = (
+                                detail_response.data
+                            )
+
+                        except Exception as detail_error:
+
+                            print(
+                                f"        WARNING: Could not get "
+                                f"details for PostgreSQL DB System "
+                                f"{display_name}: "
+                                f"{detail_error}"
+                            )
+
+                    # =================================================
+                    # BASIC DETAILS
+                    # =================================================
+
+                    display_name = _get(
+                        db_system_details,
+                        "display_name",
+                        display_name,
+                    )
+
+                    lifecycle_state = _get(
+                        db_system_details,
+                        "lifecycle_state",
+                        lifecycle_state,
+                    )
+
+                    # =================================================
+                    # POSTGRESQL VERSION
+                    # =================================================
+
+                    postgres_version = _get(
+                        db_system_details,
+                        "postgres_major_version",
+                        None,
+                    )
+
+                    if postgres_version is None:
+
+                        postgres_version = _get(
+                            db_system_details,
+                            "postgresql_version",
+                            None,
+                        )
+
+                    if postgres_version is None:
+
+                        postgres_version = _get(
+                            db_system_details,
+                            "db_version",
+                            None,
+                        )
+
+                    if postgres_version is None:
+
+                        postgres_version = _get(
+                            db_system_details,
+                            "version",
+                            "",
+                        )
+
+                    # =================================================
+                    # SHAPE
+                    # =================================================
+
                     shape = _get(
-                        db_system,
+                        db_system_details,
                         "shape",
                         "",
                     )
 
+                    # =================================================
+                    # CPU
+                    # =================================================
+
                     cpu_core_count = _get(
-                        db_system,
+                        db_system_details,
                         "cpu_core_count",
-                        _get(db_system, "cpu_cores", None),
+                        None,
                     )
+
+                    if cpu_core_count is None:
+
+                        cpu_core_count = _get(
+                            db_system_details,
+                            "cpu_cores",
+                            None,
+                        )
+
+                    # =================================================
+                    # MEMORY
+                    # =================================================
 
                     memory_gb = _get(
-                        db_system,
+                        db_system_details,
                         "memory_size_in_gbs",
-                        _get(db_system, "memory_gb", None),
+                        None,
                     )
+
+                    if memory_gb is None:
+
+                        memory_gb = _get(
+                            db_system_details,
+                            "memory_gb",
+                            None,
+                        )
+
+                    # =================================================
+                    # STORAGE
+                    # =================================================
 
                     storage_gb = _get(
-                        db_system,
+                        db_system_details,
                         "storage_size_in_gbs",
-                        _get(db_system, "storage_gb", None),
+                        None,
                     )
 
-                    # PostgreSQL API/model naming can vary by SDK release.
-                    postgres_version = _get(
-                        db_system,
-                        "postgres_major_version",
-                        _get(
-                            db_system,
-                            "postgresql_version",
-                            _get(
-                                db_system,
-                                "db_version",
-                                _get(db_system, "version", ""),
-                            ),
-                        ),
-                    )
+                    if storage_gb is None:
+
+                        storage_gb = _get(
+                            db_system_details,
+                            "storage_gb",
+                            None,
+                        )
+
+                    # =================================================
+                    # NETWORK
+                    # =================================================
 
                     subnet_id = _get(
-                        db_system,
+                        db_system_details,
                         "subnet_id",
                         "",
                     )
 
                     private_ip = _get(
-                        db_system,
+                        db_system_details,
                         "private_ip",
                         "",
                     )
 
                     public_ip = _get(
-                        db_system,
+                        db_system_details,
                         "public_ip",
                         "",
                     )
 
+                    # =================================================
+                    # AVAILABILITY DOMAIN
+                    # =================================================
+
                     availability_domain = _get(
-                        db_system,
+                        db_system_details,
                         "availability_domain",
                         "",
                     )
 
+                    # =================================================
+                    # KMS
+                    # =================================================
+
+                    kms_key_id = _get(
+                        db_system_details,
+                        "kms_key_id",
+                        "",
+                    )
+
+                    # =================================================
+                    # CREATION DATE
+                    # =================================================
+
+                    time_created = _get(
+                        db_system_details,
+                        "time_created",
+                        None,
+                    )
+
+                    # =================================================
+                    # OTHER USEFUL DETAILS
+                    # =================================================
+
+                    description = _get(
+                        db_system_details,
+                        "description",
+                        "",
+                    )
+
+                    instance_count = _get(
+                        db_system_details,
+                        "instance_count",
+                        None,
+                    )
+
+                    system_type = _get(
+                        db_system_details,
+                        "system_type",
+                        "",
+                    )
+
+                    is_highly_available = _get(
+                        db_system_details,
+                        "is_highly_available",
+                        None,
+                    )
+
+                    backup_id = _get(
+                        db_system_details,
+                        "backup_id",
+                        "",
+                    )
+
+                    # =================================================
+                    # TAGS
+                    # =================================================
+
                     defined_tags = _get(
-                        db_system,
+                        db_system_details,
                         "defined_tags",
                         {},
                     ) or {}
 
                     freeform_tags = _get(
-                        db_system,
+                        db_system_details,
                         "freeform_tags",
                         {},
                     ) or {}
 
+                    # =================================================
+                    # RESOURCE
+                    # =================================================
+
                     resource = {
-                        "service": "PostgreSQL",
-                        "resource_type": "PostgreSQL DB System",
 
-                        "id": db_system_id,
-                        "ocid": db_system_id,
+                        "service":
+                            "PostgreSQL",
 
-                        "name": display_name,
-                        "display_name": display_name,
+                        "resource_type":
+                            "PostgreSQL DB System",
 
-                        "region": region,
+                        "id":
+                            db_system_id,
 
-                        "compartment_id": compartment_id,
-                        "compartment_name": compartment_name,
+                        "ocid":
+                            db_system_id,
 
-                        "lifecycle_state": lifecycle_state,
-                        "state": lifecycle_state,
+                        "name":
+                            display_name,
 
-                        "time_created": _get(
-                            db_system,
-                            "time_created",
-                            None,
-                        ),
+                        "display_name":
+                            display_name,
 
-                        "postgresql_version": postgres_version,
-                        "version": postgres_version,
-                        "db_version": postgres_version,
+                        # -----------------------------------------
+                        # LOCATION
+                        # -----------------------------------------
 
-                        "shape": shape,
+                        "region":
+                            region,
 
-                        "cpu_core_count": cpu_core_count,
-                        "cpu_cores": cpu_core_count,
+                        "compartment_id":
+                            compartment_id,
 
-                        "memory_gb": memory_gb,
-                        "memory_in_gbs": memory_gb,
+                        "compartment_name":
+                            compartment_name,
 
-                        "storage_gb": storage_gb,
-                        "storage_size_gb": storage_gb,
+                        "availability_domain":
+                            availability_domain,
 
-                        "subnet_id": subnet_id,
+                        # -----------------------------------------
+                        # STATE
+                        # -----------------------------------------
 
-                        "private_ip": private_ip,
-                        "public_ip": public_ip,
+                        "lifecycle_state":
+                            lifecycle_state,
 
-                        "availability_domain": availability_domain,
+                        "state":
+                            lifecycle_state,
 
-                        "defined_tags": defined_tags,
-                        "freeform_tags": freeform_tags,
+                        # -----------------------------------------
+                        # DATABASE
+                        # -----------------------------------------
+
+                        "postgresql_version":
+                            postgres_version,
+
+                        "version":
+                            postgres_version,
+
+                        "db_version":
+                            postgres_version,
+
+                        # -----------------------------------------
+                        # COMPUTE
+                        # -----------------------------------------
+
+                        "shape":
+                            shape,
+
+                        "cpu_core_count":
+                            cpu_core_count,
+
+                        "cpu_cores":
+                            cpu_core_count,
+
+                        "memory_gb":
+                            memory_gb,
+
+                        "memory_in_gbs":
+                            memory_gb,
+
+                        "storage_gb":
+                            storage_gb,
+
+                        "storage_size_gb":
+                            storage_gb,
+
+                        # -----------------------------------------
+                        # NETWORK
+                        # -----------------------------------------
+
+                        "subnet_id":
+                            subnet_id,
+
+                        "private_ip":
+                            private_ip,
+
+                        "public_ip":
+                            public_ip,
+
+                        # -----------------------------------------
+                        # OTHER
+                        # -----------------------------------------
+
+                        "description":
+                            description,
+
+                        "instance_count":
+                            instance_count,
+
+                        "system_type":
+                            system_type,
+
+                        "is_highly_available":
+                            is_highly_available,
+
+                        "backup_id":
+                            backup_id,
+
+                        # -----------------------------------------
+                        # ENCRYPTION
+                        # -----------------------------------------
+
+                        "kms_key_id":
+                            kms_key_id,
+
+                        "kms_key_ocid":
+                            kms_key_id,
+
+                        # -----------------------------------------
+                        # TIME
+                        # -----------------------------------------
+
+                        "time_created":
+                            time_created,
+
+                        # -----------------------------------------
+                        # TAGS
+                        # -----------------------------------------
+
+                        "defined_tags":
+                            _safe_value(
+                                defined_tags
+                            ),
+
+                        "freeform_tags":
+                            _safe_value(
+                                freeform_tags
+                            ),
                     }
 
-                    resources.append(resource)
-
-                except Exception as exc:
-                    print(
-                        f"    ERROR processing PostgreSQL DB System "
-                        f"{_get(db_system, 'display_name', '')}: {exc}"
+                    resources.append(
+                        resource
                     )
+
+                except Exception as error:
+
+                    print(
+                        f"      ERROR processing PostgreSQL "
+                        f"DB System "
+                        f"{_get(db_system, 'display_name', '')}: "
+                        f"{error}"
+                    )
+
+    # ============================================================
+    # SUMMARY
+    # ============================================================
 
     print(
         f"PostgreSQL: {len(resources)} resources found"
