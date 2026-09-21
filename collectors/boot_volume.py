@@ -31,22 +31,145 @@ def _to_dict(obj):
         return obj
 
     try:
-
         if hasattr(obj, "to_dict"):
             return obj.to_dict()
-
     except Exception:
         pass
 
     try:
-
         if hasattr(obj, "__dict__"):
             return obj.__dict__
-
     except Exception:
         pass
 
     return {}
+
+
+def _safe_value(value):
+    """
+    Convert OCI SDK objects/lists/dicts into Excel-safe values.
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_value(val)
+            for key, val in value.items()
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _safe_value(item)
+            for item in value
+        ]
+
+    try:
+        if hasattr(value, "to_dict"):
+            return _safe_value(value.to_dict())
+    except Exception:
+        pass
+
+    return str(value)
+
+
+def _get_backup_policy_details(blockstorage_client, asset_id):
+    """
+    Get the backup policy assigned to a boot volume or volume group.
+
+    OCI backup policy assignment is queried separately from the boot
+    volume object. The assignment returns the policy OCID, which is then
+    used to fetch the full backup policy definition.
+    """
+
+    result = {
+        "backup_policy_assignment_id": "",
+        "backup_policy_asset_id": asset_id or "",
+        "backup_policy_id": "",
+        "backup_policy_display_name": "",
+        "backup_policy_name": "",
+        "backup_policy_destination_region": "",
+        "backup_policy_time_created": None,
+        "backup_policy_compartment_id": "",
+        "backup_policy_schedules": [],
+        "backup_policy_details": {},
+        "backup_policy_source": "",
+    }
+
+    if not asset_id:
+        return result
+
+    try:
+        response = blockstorage_client.get_volume_backup_policy_asset_assignment(
+            asset_id=asset_id
+        )
+        assignments = _get(response, "data", []) or []
+
+        if not isinstance(assignments, (list, tuple)):
+            assignments = [assignments]
+
+        if not assignments:
+            return result
+
+        assignment = assignments[0]
+
+        result["backup_policy_assignment_id"] = _get(
+            assignment, "id", ""
+        )
+        result["backup_policy_asset_id"] = _get(
+            assignment, "asset_id", asset_id
+        )
+        result["backup_policy_id"] = _get(
+            assignment, "policy_id", ""
+        )
+
+        policy_id = result["backup_policy_id"]
+        if not policy_id:
+            return result
+
+        try:
+            policy_response = blockstorage_client.get_volume_backup_policy(
+                policy_id=policy_id
+            )
+            policy = _get(policy_response, "data", None)
+
+            result["backup_policy_display_name"] = _get(
+                policy, "display_name", ""
+            )
+            result["backup_policy_name"] = result[
+                "backup_policy_display_name"
+            ]
+            result["backup_policy_destination_region"] = _get(
+                policy, "destination_region", ""
+            )
+            result["backup_policy_time_created"] = _get(
+                policy, "time_created", None
+            )
+            result["backup_policy_compartment_id"] = _get(
+                policy, "compartment_id", ""
+            )
+            result["backup_policy_schedules"] = _safe_value(
+                _get(policy, "schedules", []) or []
+            )
+            result["backup_policy_details"] = _safe_value(policy)
+
+        except Exception as error:
+            print(
+                f"    WARNING getting backup policy details "
+                f"for asset {asset_id}: {error}"
+            )
+
+    except Exception as error:
+        print(
+            f"    WARNING getting backup policy assignment "
+            f"for asset {asset_id}: {error}"
+        )
+
+    return result
 
 
 def collect_boot_volume(config):
@@ -57,7 +180,7 @@ def collect_boot_volume(config):
         - All accessible compartments
         - All availability domains
 
-    Collects:
+    Collects important Boot Volume information including:
 
         Basic:
         - Name
@@ -66,7 +189,6 @@ def collect_boot_volume(config):
         - Region
         - Availability Domain
         - Lifecycle State
-        - Lifecycle Details
         - Creation Time
 
         Storage:
@@ -101,6 +223,10 @@ def collect_boot_volume(config):
     # =============================================================
     # TENANCY OCID
     # =============================================================
+    #
+    # OCI config normally uses "tenancy", not "tenancy_id".
+    #
+    # =============================================================
 
     tenancy_id = config.get("tenancy")
 
@@ -132,10 +258,8 @@ def collect_boot_volume(config):
 
         try:
 
-            blockstorage_client = (
-                oci.core.BlockstorageClient(
-                    region_config
-                )
+            blockstorage_client = oci.core.BlockstorageClient(
+                region_config
             )
 
         except Exception as error:
@@ -153,10 +277,8 @@ def collect_boot_volume(config):
 
         try:
 
-            identity_client = (
-                oci.identity.IdentityClient(
-                    region_config
-                )
+            identity_client = oci.identity.IdentityClient(
+                region_config
             )
 
             availability_domains = (
@@ -200,9 +322,6 @@ def collect_boot_volume(config):
                     "",
                 )
 
-                if not ad_name:
-                    continue
-
                 try:
 
                     # =================================================
@@ -236,21 +355,21 @@ def collect_boot_volume(config):
 
                 for boot_volume in boot_volumes:
 
-                    display_name = _get(
-                        boot_volume,
-                        "display_name",
-                        "",
-                    )
-
                     try:
 
                         # =================================================
-                        # BASIC
+                        # BASIC INFORMATION
                         # =================================================
 
                         boot_volume_id = _get(
                             boot_volume,
                             "id",
+                            "",
+                        )
+
+                        display_name = _get(
+                            boot_volume,
+                            "display_name",
                             "",
                         )
 
@@ -272,14 +391,8 @@ def collect_boot_volume(config):
                             None,
                         )
 
-                        actual_compartment_id = _get(
-                            boot_volume,
-                            "compartment_id",
-                            compartment_id,
-                        )
-
                         # =================================================
-                        # STORAGE
+                        # STORAGE INFORMATION
                         # =================================================
 
                         size_in_gbs = _get(
@@ -301,7 +414,7 @@ def collect_boot_volume(config):
                         )
 
                         # =================================================
-                        # SOURCE
+                        # SOURCE INFORMATION
                         # =================================================
 
                         source_type = _get(
@@ -331,6 +444,46 @@ def collect_boot_volume(config):
                             "kms_key_id",
                             "",
                         )
+
+                        # =================================================
+                        # BACKUP POLICY
+                        # =================================================
+
+                        backup_policy_id = _get(
+                            boot_volume,
+                            "backup_policy_id",
+                            "",
+                        )
+
+                        backup_policy = _get_backup_policy_details(
+                            blockstorage_client,
+                            boot_volume_id,
+                        )
+
+                        backup_policy_source = "BOOT_VOLUME" if backup_policy[
+                            "backup_policy_id"
+                        ] else ""
+
+                        # A backup policy can also be managed through the
+                        # volume group. Fall back to the volume group when
+                        # the boot volume itself has no direct assignment.
+                        if (
+                            not backup_policy["backup_policy_id"]
+                            and volume_group_id
+                        ):
+                            group_backup_policy = _get_backup_policy_details(
+                                blockstorage_client,
+                                volume_group_id,
+                            )
+
+                            if group_backup_policy["backup_policy_id"]:
+                                backup_policy = group_backup_policy
+                                backup_policy_source = "VOLUME_GROUP"
+
+                        if not backup_policy_id:
+                            backup_policy_id = backup_policy[
+                                "backup_policy_id"
+                            ]
 
                         # =================================================
                         # CONFIGURATION
@@ -377,7 +530,7 @@ def collect_boot_volume(config):
                         details = {
 
                             # ---------------------------------------------
-                            # Basic
+                            # BASIC
                             # ---------------------------------------------
 
                             "availability_domain":
@@ -390,7 +543,7 @@ def collect_boot_volume(config):
                                 lifecycle_details,
 
                             # ---------------------------------------------
-                            # Storage
+                            # STORAGE
                             # ---------------------------------------------
 
                             "size_in_gbs":
@@ -412,7 +565,7 @@ def collect_boot_volume(config):
                                 volume_group_id,
 
                             # ---------------------------------------------
-                            # Source
+                            # SOURCE
                             # ---------------------------------------------
 
                             "source_type":
@@ -425,7 +578,7 @@ def collect_boot_volume(config):
                                 source_volume_backup_id,
 
                             # ---------------------------------------------
-                            # Encryption
+                            # ENCRYPTION
                             # ---------------------------------------------
 
                             "kms_key_id":
@@ -435,22 +588,75 @@ def collect_boot_volume(config):
                                 bool(kms_key_id),
 
                             # ---------------------------------------------
-                            # Configuration
+                            # BACKUP POLICY
+                            # ---------------------------------------------
+
+                            "backup_policy_id":
+                                backup_policy_id,
+
+                            "backup_policy_assignment_id":
+                                backup_policy[
+                                    "backup_policy_assignment_id"
+                                ],
+
+                            "backup_policy_asset_id":
+                                backup_policy[
+                                    "backup_policy_asset_id"
+                                ],
+
+                            "backup_policy_display_name":
+                                backup_policy[
+                                    "backup_policy_display_name"
+                                ],
+
+                            "backup_policy_name":
+                                backup_policy[
+                                    "backup_policy_name"
+                                ],
+
+                            "backup_policy_destination_region":
+                                backup_policy[
+                                    "backup_policy_destination_region"
+                                ],
+
+                            "backup_policy_time_created":
+                                backup_policy[
+                                    "backup_policy_time_created"
+                                ],
+
+                            "backup_policy_compartment_id":
+                                backup_policy[
+                                    "backup_policy_compartment_id"
+                                ],
+
+                            "backup_policy_schedules":
+                                backup_policy[
+                                    "backup_policy_schedules"
+                                ],
+
+                            "backup_policy_details":
+                                backup_policy[
+                                    "backup_policy_details"
+                                ],
+
+                            "backup_policy_source":
+                                backup_policy_source,
+
+                            # ---------------------------------------------
+                            # CONFIGURATION
                             # ---------------------------------------------
 
                             "is_hydrated":
                                 is_hydrated,
 
                             "autotune_policies":
-                                _to_dict(
-                                    autotune_policies
-                                ),
+                                _to_dict(autotune_policies),
 
                             "policy":
                                 policy,
 
                             # ---------------------------------------------
-                            # Tags
+                            # TAGS
                             # ---------------------------------------------
 
                             "defined_tags":
@@ -462,15 +668,6 @@ def collect_boot_volume(config):
 
                         # =================================================
                         # RESOURCE OBJECT
-                        # =================================================
-                        #
-                        # IMPORTANT:
-                        #
-                        # Do NOT pass freeform_tags directly to Resource.
-                        # Your current Resource constructor rejects it.
-                        #
-                        # freeform_tags remains available inside details.
-                        #
                         # =================================================
 
                         resource = Resource(
@@ -484,7 +681,11 @@ def collect_boot_volume(config):
                             ocid=boot_volume_id,
 
                             compartment_id=(
-                                actual_compartment_id
+                                _get(
+                                    boot_volume,
+                                    "compartment_id",
+                                    compartment_id,
+                                )
                             ),
 
                             compartment_name=(
@@ -498,6 +699,8 @@ def collect_boot_volume(config):
                             time_created=time_created,
 
                             defined_tags=defined_tags,
+
+                            freeform_tags=freeform_tags,
 
                             details=details,
                         )
