@@ -77,16 +77,10 @@ def _safe_value(value):
     return str(value)
 
 
-def _get_backup_policy_details(blockstorage_client, asset_id):
-    """
-    Get the backup policy assigned to a boot volume or volume group.
+def _empty_backup_policy(asset_id=""):
+    """Return a consistent empty backup-policy result."""
 
-    OCI backup policy assignment is queried separately from the boot
-    volume object. The assignment returns the policy OCID, which is then
-    used to fetch the full backup policy definition.
-    """
-
-    result = {
+    return {
         "backup_policy_assignment_id": "",
         "backup_policy_asset_id": asset_id or "",
         "backup_policy_id": "",
@@ -97,11 +91,93 @@ def _get_backup_policy_details(blockstorage_client, asset_id):
         "backup_policy_compartment_id": "",
         "backup_policy_schedules": [],
         "backup_policy_details": {},
-        "backup_policy_source": "",
     }
 
-    if not asset_id:
+
+def _add_backup_policy_definition(
+    blockstorage_client,
+    result,
+    policy_id,
+    policy_cache,
+):
+    """Populate policy details, using a per-region cache."""
+
+    if not policy_id:
         return result
+
+    result["backup_policy_id"] = policy_id
+
+    if policy_id in policy_cache:
+        result.update(policy_cache[policy_id])
+        return result
+
+    details = {
+        "backup_policy_id": policy_id,
+        "backup_policy_display_name": "",
+        "backup_policy_name": "",
+        "backup_policy_destination_region": "",
+        "backup_policy_time_created": None,
+        "backup_policy_compartment_id": "",
+        "backup_policy_schedules": [],
+        "backup_policy_details": {},
+    }
+
+    try:
+        response = blockstorage_client.get_volume_backup_policy(
+            policy_id=policy_id
+        )
+        policy = _get(response, "data", None)
+
+        details["backup_policy_display_name"] = _get(
+            policy, "display_name", ""
+        )
+        details["backup_policy_name"] = details[
+            "backup_policy_display_name"
+        ]
+        details["backup_policy_destination_region"] = _get(
+            policy, "destination_region", ""
+        )
+        details["backup_policy_time_created"] = _get(
+            policy, "time_created", None
+        )
+        details["backup_policy_compartment_id"] = _get(
+            policy, "compartment_id", ""
+        )
+        details["backup_policy_schedules"] = _safe_value(
+            _get(policy, "schedules", []) or []
+        )
+        details["backup_policy_details"] = _safe_value(policy)
+
+    except Exception as error:
+        print(
+            f"    WARNING getting backup policy details "
+            f"for policy {policy_id}: {error}"
+        )
+
+    policy_cache[policy_id] = details
+    result.update(details)
+    return result
+
+
+def _get_backup_policy_assignment(
+    blockstorage_client,
+    asset_id,
+    assignment_cache,
+):
+    """
+    Get one asset's backup-policy assignment and cache it.
+
+    This endpoint is relatively expensive and is subject to OCI
+    throttling, so never call it repeatedly for the same asset.
+    """
+
+    if not asset_id:
+        return _empty_backup_policy(asset_id)
+
+    if asset_id in assignment_cache:
+        return assignment_cache[asset_id].copy()
+
+    result = _empty_backup_policy(asset_id)
 
     try:
         response = blockstorage_client.get_volume_backup_policy_asset_assignment(
@@ -112,55 +188,16 @@ def _get_backup_policy_details(blockstorage_client, asset_id):
         if not isinstance(assignments, (list, tuple)):
             assignments = [assignments]
 
-        if not assignments:
-            return result
-
-        assignment = assignments[0]
-
-        result["backup_policy_assignment_id"] = _get(
-            assignment, "id", ""
-        )
-        result["backup_policy_asset_id"] = _get(
-            assignment, "asset_id", asset_id
-        )
-        result["backup_policy_id"] = _get(
-            assignment, "policy_id", ""
-        )
-
-        policy_id = result["backup_policy_id"]
-        if not policy_id:
-            return result
-
-        try:
-            policy_response = blockstorage_client.get_volume_backup_policy(
-                policy_id=policy_id
+        if assignments:
+            assignment = assignments[0]
+            result["backup_policy_assignment_id"] = _get(
+                assignment, "id", ""
             )
-            policy = _get(policy_response, "data", None)
-
-            result["backup_policy_display_name"] = _get(
-                policy, "display_name", ""
+            result["backup_policy_asset_id"] = _get(
+                assignment, "asset_id", asset_id
             )
-            result["backup_policy_name"] = result[
-                "backup_policy_display_name"
-            ]
-            result["backup_policy_destination_region"] = _get(
-                policy, "destination_region", ""
-            )
-            result["backup_policy_time_created"] = _get(
-                policy, "time_created", None
-            )
-            result["backup_policy_compartment_id"] = _get(
-                policy, "compartment_id", ""
-            )
-            result["backup_policy_schedules"] = _safe_value(
-                _get(policy, "schedules", []) or []
-            )
-            result["backup_policy_details"] = _safe_value(policy)
-
-        except Exception as error:
-            print(
-                f"    WARNING getting backup policy details "
-                f"for asset {asset_id}: {error}"
+            result["backup_policy_id"] = _get(
+                assignment, "policy_id", ""
             )
 
     except Exception as error:
@@ -169,6 +206,7 @@ def _get_backup_policy_details(blockstorage_client, asset_id):
             f"for asset {asset_id}: {error}"
         )
 
+    assignment_cache[asset_id] = result.copy()
     return result
 
 
@@ -270,6 +308,11 @@ def collect_boot_volume(config):
             )
 
             continue
+
+        # Cache policy definitions and group assignments per region.
+        # This prevents one API call per boot volume and avoids OCI 429 throttling.
+        policy_cache = {}
+        assignment_cache = {}
 
         # =========================================================
         # IDENTITY CLIENT
@@ -455,35 +498,44 @@ def collect_boot_volume(config):
                             "",
                         )
 
-                        backup_policy = _get_backup_policy_details(
-                            blockstorage_client,
-                            boot_volume_id,
-                        )
+                        # Prefer the policy OCID already returned on the boot
+                        # volume. Only use the asset-assignment API when the
+                        # boot volume has no direct policy and a volume-group
+                        # fallback is required.
+                        backup_policy = _empty_backup_policy(boot_volume_id)
+                        backup_policy_source = ""
 
-                        backup_policy_source = "BOOT_VOLUME" if backup_policy[
-                            "backup_policy_id"
-                        ] else ""
+                        if backup_policy_id:
+                            backup_policy["backup_policy_asset_id"] = boot_volume_id
+                            backup_policy = _add_backup_policy_definition(
+                                blockstorage_client,
+                                backup_policy,
+                                backup_policy_id,
+                                policy_cache,
+                            )
+                            backup_policy_source = "BOOT_VOLUME"
 
-                        # A backup policy can also be managed through the
-                        # volume group. Fall back to the volume group when
-                        # the boot volume itself has no direct assignment.
-                        if (
-                            not backup_policy["backup_policy_id"]
-                            and volume_group_id
-                        ):
-                            group_backup_policy = _get_backup_policy_details(
+                        elif volume_group_id:
+                            group_assignment = _get_backup_policy_assignment(
                                 blockstorage_client,
                                 volume_group_id,
+                                assignment_cache,
                             )
 
-                            if group_backup_policy["backup_policy_id"]:
-                                backup_policy = group_backup_policy
+                            if group_assignment["backup_policy_id"]:
+                                group_policy_id = group_assignment[
+                                    "backup_policy_id"
+                                ]
+                                backup_policy = _add_backup_policy_definition(
+                                    blockstorage_client,
+                                    group_assignment,
+                                    group_policy_id,
+                                    policy_cache,
+                                )
                                 backup_policy_source = "VOLUME_GROUP"
 
-                        if not backup_policy_id:
-                            backup_policy_id = backup_policy[
-                                "backup_policy_id"
-                            ]
+                                if not backup_policy_id:
+                                    backup_policy_id = group_policy_id
 
                         # =================================================
                         # CONFIGURATION
@@ -699,8 +751,6 @@ def collect_boot_volume(config):
                             time_created=time_created,
 
                             defined_tags=defined_tags,
-
-                            freeform_tags=freeform_tags,
 
                             details=details,
                         )
