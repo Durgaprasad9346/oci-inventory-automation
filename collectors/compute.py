@@ -5,10 +5,6 @@ from utils.compartments import get_compartments
 from utils.regions import get_regions
 
 
-# ============================================================
-# SAFE GET
-# ============================================================
-
 def _get(obj, name, default=None):
     """
     Safely get an attribute from an OCI SDK object or dictionary.
@@ -20,15 +16,8 @@ def _get(obj, name, default=None):
     if isinstance(obj, dict):
         return obj.get(name, default)
 
-    try:
-        return getattr(obj, name, default)
-    except Exception:
-        return default
+    return getattr(obj, name, default)
 
-
-# ============================================================
-# SHAPE DETAILS
-# ============================================================
 
 def _get_shape_details(compute_client, shape_name):
     """
@@ -47,269 +36,159 @@ def _get_shape_details(compute_client, shape_name):
         return None
 
 
-# ============================================================
-# GET VNIC ATTACHMENTS
-# ============================================================
-
-def _get_vnic_attachments(
-    compute_client,
-    compartment_id,
-    instance_id,
-):
-    """
-    Get VNIC attachments for a Compute instance.
-
-    Returns:
-        List of VNIC attachment objects.
-    """
-
-    if not instance_id:
-        return []
-
-    try:
-
-        response = (
-            oci.pagination.list_call_get_all_results(
-                compute_client.list_vnic_attachments,
-                compartment_id=compartment_id,
-                instance_id=instance_id,
-            )
-        )
-
-        return response.data
-
-    except Exception as exc:
-
-        print(
-            f"    WARNING collecting VNIC attachments "
-            f"for instance {instance_id}: {exc}"
-        )
-
-        return []
-
-
-# ============================================================
-# GET PRIVATE IP DETAILS
-# ============================================================
-
-def _get_private_ip_details(
+def _get_vnic_details(
     virtual_network_client,
     vnic_id,
 ):
     """
-    Get Private IP information using VNIC OCID.
-
-    This avoids VirtualNetworkClient.get_vnic().
-
-    Returns:
-        Dictionary containing networking details.
+    Get VNIC details using VNIC OCID.
     """
 
-    result = {
-        "private_ip": "",
-        "public_ip": "",
-        "ipv6_address": "",
-        "subnet_id": "",
-        "hostname": "",
-        "hostname_label": "",
-        "private_dns_name": "",
-        "mac_address": "",
-        "vlan_tag": "",
-        "nic_index": "",
-        "vnic_id": vnic_id or "",
-    }
+    if not vnic_id:
+        return None
+
+    try:
+        response = virtual_network_client.get_vnic(vnic_id)
+        return response.data
+
+    except Exception:
+        return None
+
+
+def _get_primary_vnic_details(
+    compute_client,
+    virtual_network_client,
+    compartment_id,
+    instance_id,
+):
+    """
+    Get the primary VNIC attached to a Compute instance.
+
+    The Instance model does not expose a VNIC OCID directly. OCI requires
+    listing the VNIC attachments for the instance and then retrieving the
+    VNIC itself.
+    """
+
+    if not instance_id:
+        return "", None, ""
+
+    try:
+        response = oci.pagination.list_call_get_all_results(
+            compute_client.list_vnic_attachments,
+            compartment_id=compartment_id,
+            instance_id=instance_id,
+        )
+        attachments = response.data or []
+
+    except Exception as exc:
+        print(
+            f"    WARNING collecting VNIC attachments for instance "
+            f"{instance_id}: {exc}"
+        )
+        return "", None, ""
+
+    if not attachments:
+        return "", None, ""
+
+    primary_attachment = None
+
+    # NIC index 0 is the primary VNIC in the standard Compute attachment
+    # model. Prefer it, then fall back to the first returned attachment.
+    for attachment in attachments:
+        nic_index = _get(
+            attachment,
+            "nic_index",
+            None,
+        )
+
+        if nic_index == 0 or str(nic_index) == "0":
+            primary_attachment = attachment
+            break
+
+    if primary_attachment is None:
+        primary_attachment = attachments[0]
+
+    vnic_id = _get(
+        primary_attachment,
+        "vnic_id",
+        "",
+    )
+
+    nic_index = _get(
+        primary_attachment,
+        "nic_index",
+        "",
+    )
 
     if not vnic_id:
+        return "", None, nic_index
+
+    vnic = _get_vnic_details(
+        virtual_network_client,
+        vnic_id,
+    )
+
+    return vnic_id, vnic, nic_index
+
+
+def _get_boot_volume_attachments(
+    compute_client,
+    compartment_id,
+    availability_domain,
+):
+    """
+    Get Boot Volume attachments for a compartment and
+    availability domain.
+
+    Returns:
+
+        instance_id -> boot_volume_id
+    """
+
+    result = {}
+
+    if not availability_domain:
         return result
 
     try:
 
         response = (
             oci.pagination.list_call_get_all_results(
-                virtual_network_client.list_private_ips,
-                vnic_id=vnic_id,
+                compute_client.list_boot_volume_attachments,
+                compartment_id=compartment_id,
+                availability_domain=availability_domain,
             )
         )
 
-        private_ips = response.data
+        for attachment in response.data:
 
-        if not private_ips:
-            return result
-
-        # ----------------------------------------------------
-        # Prefer primary private IP
-        # ----------------------------------------------------
-
-        primary_ip = None
-
-        for private_ip in private_ips:
-
-            if _get(
-                private_ip,
-                "is_primary",
-                False,
-            ):
-
-                primary_ip = private_ip
-                break
-
-        if primary_ip is None:
-            primary_ip = private_ips[0]
-
-        # ----------------------------------------------------
-        # Private IP
-        # ----------------------------------------------------
-
-        result["private_ip"] = _get(
-            primary_ip,
-            "ip_address",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # Public IP
-        # ----------------------------------------------------
-
-        public_ip = _get(
-            primary_ip,
-            "public_ip",
-            None,
-        )
-
-        if public_ip:
-
-            if isinstance(public_ip, str):
-
-                result["public_ip"] = public_ip
-
-            else:
-
-                result["public_ip"] = _get(
-                    public_ip,
-                    "ip_address",
-                    "",
-                )
-
-        # ----------------------------------------------------
-        # IPv6
-        # ----------------------------------------------------
-
-        ipv6_addresses = _get(
-            primary_ip,
-            "ipv6_addresses",
-            None,
-        )
-
-        if ipv6_addresses:
-
-            if isinstance(
-                ipv6_addresses,
-                list,
-            ):
-
-                ipv6_values = []
-
-                for ipv6 in ipv6_addresses:
-
-                    if isinstance(
-                        ipv6,
-                        str,
-                    ):
-
-                        ipv6_values.append(
-                            ipv6
-                        )
-
-                    else:
-
-                        address = _get(
-                            ipv6,
-                            "ipv6_address",
-                            "",
-                        )
-
-                        if address:
-                            ipv6_values.append(
-                                address
-                            )
-
-                result["ipv6_address"] = ", ".join(
-                    ipv6_values
-                )
-
-        # Some SDK versions may expose a single value.
-        if not result["ipv6_address"]:
-
-            ipv6_address = _get(
-                primary_ip,
-                "ipv6_address",
+            instance_id = _get(
+                attachment,
+                "instance_id",
                 "",
             )
 
-            if ipv6_address:
-                result["ipv6_address"] = (
-                    ipv6_address
-                )
+            boot_volume_id = _get(
+                attachment,
+                "boot_volume_id",
+                "",
+            )
 
-        # ----------------------------------------------------
-        # Subnet
-        # ----------------------------------------------------
+            if instance_id and boot_volume_id:
 
-        result["subnet_id"] = _get(
-            primary_ip,
-            "subnet_id",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # Hostname
-        # ----------------------------------------------------
-
-        result["hostname_label"] = _get(
-            primary_ip,
-            "hostname_label",
-            "",
-        )
-
-        result["hostname"] = result[
-            "hostname_label"
-        ]
-
-        # ----------------------------------------------------
-        # Private DNS
-        # ----------------------------------------------------
-
-        result["private_dns_name"] = _get(
-            primary_ip,
-            "hostname_label",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # VLAN
-        # ----------------------------------------------------
-
-        result["vlan_tag"] = _get(
-            primary_ip,
-            "vlan_tag",
-            "",
-        )
-
-        return result
+                result[instance_id] = boot_volume_id
 
     except Exception as exc:
 
         print(
-            f"    WARNING collecting Private IP "
-            f"details for VNIC {vnic_id}: {exc}"
+            f"    WARNING collecting Boot Volume "
+            f"attachments from compartment "
+            f"{compartment_id}, "
+            f"AD {availability_domain}: {exc}"
         )
 
-        return result
+    return result
 
-
-# ============================================================
-# COLLECT COMPUTE
-# ============================================================
 
 def collect_compute(config):
     """
@@ -317,8 +196,9 @@ def collect_compute(config):
 
         - All subscribed regions
         - All accessible compartments
+        - All availability domains
 
-    Details collected:
+    Detailed information collected:
 
         Basic
         -----
@@ -343,10 +223,12 @@ def collect_compute(config):
         Private IP
         Public IP
         IPv6
+        MAC Address
         Subnet OCID
         Hostname
         Private DNS Name
         VLAN Tag
+        NIC Index
 
         Placement
         ---------
@@ -363,23 +245,14 @@ def collect_compute(config):
 
         Tags
         ----
-        Defined Tags
         Freeform Tags
+        Defined Tags
     """
 
     resources = []
 
-    compartments = get_compartments(
-        config
-    )
-
-    regions = get_regions(
-        config
-    )
-
-    # ========================================================
-    # REGIONS
-    # ========================================================
+    compartments = get_compartments(config)
+    regions = get_regions(config)
 
     for region in regions:
 
@@ -392,19 +265,9 @@ def collect_compute(config):
 
         try:
 
-            # ------------------------------------------------
-            # Compute Client
-            # ------------------------------------------------
-
-            compute_client = (
-                oci.core.ComputeClient(
-                    region_config
-                )
+            compute_client = oci.core.ComputeClient(
+                region_config
             )
-
-            # ------------------------------------------------
-            # Virtual Network Client
-            # ------------------------------------------------
 
             virtual_network_client = (
                 oci.core.VirtualNetworkClient(
@@ -412,9 +275,34 @@ def collect_compute(config):
                 )
             )
 
-            # =================================================
-            # COMPARTMENTS
-            # =================================================
+            # -------------------------------------------------
+            # Get Availability Domains
+            # -------------------------------------------------
+
+            tenancy_id = config.get("tenancy")
+
+            if not tenancy_id:
+                print(
+                    "    ERROR: tenancy OCID not found in config"
+                )
+                continue
+
+            identity_client = (
+                oci.identity.IdentityClient(
+                    region_config
+                )
+            )
+
+            availability_domains = (
+                oci.pagination.list_call_get_all_results(
+                    identity_client.list_availability_domains,
+                    compartment_id=tenancy_id,
+                )
+            ).data
+
+            # -------------------------------------------------
+            # Process Compartments
+            # -------------------------------------------------
 
             for compartment in compartments:
 
@@ -422,10 +310,7 @@ def collect_compute(config):
                     compartment,
                     "id",
                     compartment
-                    if isinstance(
-                        compartment,
-                        str,
-                    )
+                    if isinstance(compartment, str)
                     else None,
                 )
 
@@ -438,9 +323,35 @@ def collect_compute(config):
                 if not compartment_id:
                     continue
 
-                # =================================================
-                # LIST COMPUTE INSTANCES
-                # =================================================
+                # -------------------------------------------------
+                # Get Boot Volume Attachments for every AD
+                # -------------------------------------------------
+
+                boot_volume_attachments = {}
+
+                for availability_domain in availability_domains:
+
+                    ad_name = _get(
+                        availability_domain,
+                        "name",
+                        "",
+                    )
+
+                    attachments = (
+                        _get_boot_volume_attachments(
+                            compute_client,
+                            compartment_id,
+                            ad_name,
+                        )
+                    )
+
+                    boot_volume_attachments.update(
+                        attachments
+                    )
+
+                # -------------------------------------------------
+                # Get Compute Instances
+                # -------------------------------------------------
 
                 try:
 
@@ -461,23 +372,13 @@ def collect_compute(config):
 
                     continue
 
-                # =================================================
-                # PROCESS INSTANCES
-                # =================================================
+                # -------------------------------------------------
+                # Process Instances
+                # -------------------------------------------------
 
                 for instance in instances:
 
-                    display_name = _get(
-                        instance,
-                        "display_name",
-                        "",
-                    )
-
                     try:
-
-                        # =================================================
-                        # BASIC
-                        # =================================================
 
                         instance_id = _get(
                             instance,
@@ -485,27 +386,11 @@ def collect_compute(config):
                             "",
                         )
 
-                        lifecycle_state = _get(
+                        display_name = _get(
                             instance,
-                            "lifecycle_state",
+                            "display_name",
                             "",
                         )
-
-                        lifecycle_details = _get(
-                            instance,
-                            "lifecycle_details",
-                            "",
-                        )
-
-                        time_created = _get(
-                            instance,
-                            "time_created",
-                            None,
-                        )
-
-                        # =================================================
-                        # SHAPE
-                        # =================================================
 
                         shape = _get(
                             instance,
@@ -518,6 +403,10 @@ def collect_compute(config):
                             "shape_config",
                             None,
                         )
+
+                        # -------------------------------------------------
+                        # Shape information
+                        # -------------------------------------------------
 
                         ocpus = _get(
                             shape_config,
@@ -549,9 +438,9 @@ def collect_compute(config):
                             None,
                         )
 
-                        # =================================================
-                        # SHAPE API FALLBACK
-                        # =================================================
+                        # -------------------------------------------------
+                        # Fallback to Shape API
+                        # -------------------------------------------------
 
                         if (
                             ocpus is None
@@ -592,153 +481,107 @@ def collect_compute(config):
                                         None,
                                     )
 
-                        # =================================================
-                        # NETWORKING
-                        #
-                        # NO get_vnic()
-                        # NO list_boot_volume_attachments()
-                        # =================================================
+                        # -------------------------------------------------
+                        # VNIC
+                        # -------------------------------------------------
+
+                        (
+                            vnic_id,
+                            vnic,
+                            nic_index,
+                        ) = _get_primary_vnic_details(
+                            compute_client,
+                            virtual_network_client,
+                            compartment_id,
+                            instance_id,
+                        )
 
                         private_ip = ""
                         public_ip = ""
                         ipv6_address = ""
-                        vnic_id = ""
                         mac_address = ""
                         subnet_id = ""
                         hostname = ""
                         hostname_label = ""
                         private_dns_name = ""
                         vlan_tag = ""
-                        nic_index = ""
 
-                        # -------------------------------------------------
-                        # Get VNIC attachments for THIS instance
-                        # -------------------------------------------------
+                        if vnic:
 
-                        vnic_attachments = (
-                            _get_vnic_attachments(
-                                compute_client,
-                                compartment_id,
-                                instance_id,
-                            )
-                        )
-
-                        # -------------------------------------------------
-                        # Prefer primary VNIC
-                        # -------------------------------------------------
-
-                        selected_attachment = None
-
-                        for attachment in (
-                            vnic_attachments
-                        ):
-
-                            is_primary = _get(
-                                attachment,
-                                "is_primary",
-                                False,
-                            )
-
-                            if is_primary:
-
-                                selected_attachment = (
-                                    attachment
+                                private_ip = _get(
+                                    vnic,
+                                    "private_ip",
+                                    "",
                                 )
 
-                                break
-
-                        if (
-                            selected_attachment
-                            is None
-                            and vnic_attachments
-                        ):
-
-                            selected_attachment = (
-                                vnic_attachments[0]
-                            )
-
-                        # -------------------------------------------------
-                        # Get VNIC OCID
-                        # -------------------------------------------------
-
-                        if selected_attachment:
-
-                            vnic_id = _get(
-                                selected_attachment,
-                                "vnic_id",
-                                "",
-                            )
-
-                            nic_index = _get(
-                                selected_attachment,
-                                "nic_index",
-                                "",
-                            )
-
-                        # -------------------------------------------------
-                        # Get Private IP information
-                        # -------------------------------------------------
-
-                        if vnic_id:
-
-                            network_details = (
-                                _get_private_ip_details(
-                                    virtual_network_client,
-                                    vnic_id,
+                                public_ip = _get(
+                                    vnic,
+                                    "public_ip",
+                                    "",
                                 )
-                            )
 
-                            private_ip = (
-                                network_details[
-                                    "private_ip"
-                                ]
-                            )
+                                ipv6_addresses = _get(
+                                    vnic,
+                                    "ipv6_addresses",
+                                    [],
+                                ) or []
 
-                            public_ip = (
-                                network_details[
-                                    "public_ip"
-                                ]
-                            )
+                                if isinstance(
+                                    ipv6_addresses,
+                                    (list, tuple),
+                                ):
+                                    ipv6_address = ", ".join(
+                                        str(address)
+                                        for address in ipv6_addresses
+                                    )
+                                else:
+                                    ipv6_address = str(
+                                        ipv6_addresses
+                                    )
 
-                            ipv6_address = (
-                                network_details[
-                                    "ipv6_address"
-                                ]
-                            )
+                                mac_address = _get(
+                                    vnic,
+                                    "mac_address",
+                                    "",
+                                )
 
-                            subnet_id = (
-                                network_details[
-                                    "subnet_id"
-                                ]
-                            )
+                                subnet_id = _get(
+                                    vnic,
+                                    "subnet_id",
+                                    "",
+                                )
 
-                            hostname = (
-                                network_details[
-                                    "hostname"
-                                ]
-                            )
+                                hostname = _get(
+                                    vnic,
+                                    "hostname_label",
+                                    "",
+                                )
 
-                            hostname_label = (
-                                network_details[
-                                    "hostname_label"
-                                ]
-                            )
+                                hostname_label = _get(
+                                    vnic,
+                                    "hostname_label",
+                                    "",
+                                )
 
-                            private_dns_name = (
-                                network_details[
-                                    "private_dns_name"
-                                ]
-                            )
+                                private_dns_name = _get(
+                                    vnic,
+                                    "private_dns_name",
+                                    "",
+                                )
 
-                            vlan_tag = (
-                                network_details[
-                                    "vlan_tag"
-                                ]
-                            )
+                                vlan_tag = _get(
+                                    vnic,
+                                    "vlan_id",
+                                    _get(
+                                        vnic,
+                                        "vlan_tag",
+                                        "",
+                                    ),
+                                )
 
-                        # =================================================
-                        # BOOT VOLUME
-                        # =================================================
+                        # -------------------------------------------------
+                        # Boot Volume
+                        # -------------------------------------------------
 
                         boot_volume_id = _get(
                             instance,
@@ -746,51 +589,18 @@ def collect_compute(config):
                             "",
                         )
 
-                        # =================================================
-                        # IMAGE
-                        # =================================================
+                        if not boot_volume_id:
 
-                        image_id = _get(
-                            instance,
-                            "image_id",
-                            "",
-                        )
+                            boot_volume_id = (
+                                boot_volume_attachments.get(
+                                    instance_id,
+                                    "",
+                                )
+                            )
 
-                        # =================================================
-                        # PLACEMENT
-                        # =================================================
-
-                        availability_domain = _get(
-                            instance,
-                            "availability_domain",
-                            "",
-                        )
-
-                        fault_domain = _get(
-                            instance,
-                            "fault_domain",
-                            "",
-                        )
-
-                        # =================================================
-                        # TAGS
-                        # =================================================
-
-                        defined_tags = _get(
-                            instance,
-                            "defined_tags",
-                            {},
-                        )
-
-                        freeform_tags = _get(
-                            instance,
-                            "freeform_tags",
-                            {},
-                        )
-
-                        # =================================================
-                        # RESOURCE
-                        # =================================================
+                        # -------------------------------------------------
+                        # Resource
+                        # -------------------------------------------------
 
                         resource = Resource(
 
@@ -808,30 +618,50 @@ def collect_compute(config):
 
                             region=region,
 
-                            state=lifecycle_state,
+                            state=_get(
+                                instance,
+                                "lifecycle_state",
+                                "",
+                            ),
 
-                            time_created=time_created,
+                            time_created=_get(
+                                instance,
+                                "time_created",
+                                None,
+                            ),
 
-                            defined_tags=defined_tags,
+                            defined_tags=_get(
+                                instance,
+                                "defined_tags",
+                                {},
+                            ),
 
                             details={
 
-                                # =========================================
-                                # BASIC
-                                # =========================================
+                                # -----------------------------------------
+                                # Basic
+                                # -----------------------------------------
 
                                 "display_name":
                                     display_name,
 
                                 "lifecycle_state":
-                                    lifecycle_state,
+                                    _get(
+                                        instance,
+                                        "lifecycle_state",
+                                        "",
+                                    ),
 
                                 "lifecycle_details":
-                                    lifecycle_details,
+                                    _get(
+                                        instance,
+                                        "lifecycle_details",
+                                        "",
+                                    ),
 
-                                # =========================================
-                                # COMPUTE
-                                # =========================================
+                                # -----------------------------------------
+                                # Compute
+                                # -----------------------------------------
 
                                 "shape":
                                     shape,
@@ -860,9 +690,9 @@ def collect_compute(config):
                                 "processor_description":
                                     processor_description,
 
-                                # =========================================
-                                # NETWORK
-                                # =========================================
+                                # -----------------------------------------
+                                # Networking
+                                # -----------------------------------------
 
                                 "private_ip":
                                     private_ip,
@@ -903,29 +733,45 @@ def collect_compute(config):
                                 "nic_index":
                                     nic_index,
 
-                                # =========================================
-                                # IMAGE
-                                # =========================================
+                                # -----------------------------------------
+                                # Image
+                                # -----------------------------------------
 
                                 "image_id":
-                                    image_id,
+                                    _get(
+                                        instance,
+                                        "image_id",
+                                        "",
+                                    ),
 
                                 "image_ocid":
-                                    image_id,
+                                    _get(
+                                        instance,
+                                        "image_id",
+                                        "",
+                                    ),
 
-                                # =========================================
-                                # PLACEMENT
-                                # =========================================
+                                # -----------------------------------------
+                                # Placement
+                                # -----------------------------------------
 
                                 "availability_domain":
-                                    availability_domain,
+                                    _get(
+                                        instance,
+                                        "availability_domain",
+                                        "",
+                                    ),
 
                                 "fault_domain":
-                                    fault_domain,
+                                    _get(
+                                        instance,
+                                        "fault_domain",
+                                        "",
+                                    ),
 
-                                # =========================================
-                                # STORAGE
-                                # =========================================
+                                # -----------------------------------------
+                                # Storage
+                                # -----------------------------------------
 
                                 "boot_volume_id":
                                     boot_volume_id,
@@ -933,9 +779,9 @@ def collect_compute(config):
                                 "boot_volume_ocid":
                                     boot_volume_id,
 
-                                # =========================================
-                                # OTHER
-                                # =========================================
+                                # -----------------------------------------
+                                # Other
+                                # -----------------------------------------
 
                                 "launch_mode":
                                     _get(
@@ -944,24 +790,27 @@ def collect_compute(config):
                                         "",
                                     ),
 
-                                # =========================================
-                                # TAGS
-                                #
-                                # Workbook will flatten these into
-                                # individual columns at the END.
-                                # =========================================
+                                # -----------------------------------------
+                                # Tags
+                                # -----------------------------------------
 
                                 "defined_tags":
-                                    defined_tags,
+                                    _get(
+                                        instance,
+                                        "defined_tags",
+                                        {},
+                                    ),
 
                                 "freeform_tags":
-                                    freeform_tags,
+                                    _get(
+                                        instance,
+                                        "freeform_tags",
+                                        {},
+                                    ),
                             },
                         )
 
-                        resources.append(
-                            resource
-                        )
+                        resources.append(resource)
 
                     except Exception as exc:
 
@@ -976,10 +825,6 @@ def collect_compute(config):
                 f"  ERROR collecting Compute "
                 f"region {region}: {exc}"
             )
-
-    # ========================================================
-    # FINAL COUNT
-    # ========================================================
 
     print(
         f"Compute: {len(resources)} resources found"
