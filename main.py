@@ -36,6 +36,14 @@ from collectors.local_peering_gateway import (
     collect_local_peering_gateways
 )
 
+from collectors.drg import collect_drg
+from collectors.internet_gateway import collect_internet_gateway
+from collectors.ipsec_connection import collect_ipsec_connection
+from collectors.nat_gateway import collect_nat_gateway
+from collectors.remote_peering_connection import (
+    collect_remote_peering_connection
+)
+
 # ============================================================
 # LOAD BALANCER / FILE / OBJECT STORAGE
 # ============================================================
@@ -126,6 +134,10 @@ from collectors.streaming import (
     collect_streaming
 )
 
+from collectors.log_group import collect_log_groups
+from collectors.event_rule import collect_event_rules
+from collectors.service_connector import collect_service_connectors
+
 # ============================================================
 # NOTIFICATION SERVICE
 # ============================================================
@@ -161,6 +173,9 @@ from collectors.dns_views import (
 from collectors.policies import (
     collect_policies
 )
+
+from collectors.iam_user import collect_iam_users
+from collectors.iam_group import collect_iam_groups
 
 # ============================================================
 # DATA SAFE
@@ -348,6 +363,31 @@ def main():
         collect_local_peering_gateways,
     )
 
+    manager.register(
+        "DRG",
+        collect_drg,
+    )
+
+    manager.register(
+        "Internet Gateway",
+        collect_internet_gateway,
+    )
+
+    manager.register(
+        "IPSec Connection",
+        collect_ipsec_connection,
+    )
+
+    manager.register(
+        "NAT Gateway",
+        collect_nat_gateway,
+    )
+
+    manager.register(
+        "Remote Peering Connection",
+        collect_remote_peering_connection,
+    )
+
     # ========================================================
     # LOAD BALANCER
     # ========================================================
@@ -513,6 +553,21 @@ def main():
         collect_streaming,
     )
 
+    manager.register(
+        "Log Groups",
+        collect_log_groups,
+    )
+
+    manager.register(
+        "Event Rules",
+        collect_event_rules,
+    )
+
+    manager.register(
+        "Service Connectors",
+        collect_service_connectors,
+    )
+
     # ========================================================
     # DNS
     # ========================================================
@@ -539,6 +594,16 @@ def main():
     manager.register(
         "Policies",
         collect_policies,
+    )
+
+    manager.register(
+        "IAM Users",
+        collect_iam_users,
+    )
+
+    manager.register(
+        "IAM Groups",
+        collect_iam_groups,
     )
 
     # ========================================================
