@@ -1,3 +1,5 @@
+import time
+
 import oci
 
 from collectors.base import Resource
@@ -159,6 +161,51 @@ def _add_backup_policy_definition(
     return result
 
 
+
+# ============================================================
+# BACKUP POLICY RATE-LIMIT / CACHING HELPERS
+# ============================================================
+
+# The asset-assignment endpoint is a per-asset GET endpoint.
+# Large inventories can hit OCI's Block Storage throttling when
+# many unique volume-group assets are checked in quick succession.
+_ASSIGNMENT_MIN_INTERVAL_SECONDS = 0.75
+_ASSIGNMENT_LAST_REQUEST_TIME = 0.0
+
+
+def _is_429_error(error):
+    """Return True when an OCI error represents HTTP 429."""
+
+    status = getattr(error, "status", None)
+
+    if status == 429:
+        return True
+
+    text = str(error)
+
+    return (
+        "TooManyRequests" in text
+        or "status': 429" in text
+        or 'status": 429' in text
+    )
+
+
+def _throttle_assignment_request():
+    """Keep assignment API calls below a conservative request rate."""
+
+    global _ASSIGNMENT_LAST_REQUEST_TIME
+
+    now = time.monotonic()
+    elapsed = now - _ASSIGNMENT_LAST_REQUEST_TIME
+
+    if elapsed < _ASSIGNMENT_MIN_INTERVAL_SECONDS:
+        time.sleep(
+            _ASSIGNMENT_MIN_INTERVAL_SECONDS - elapsed
+        )
+
+    _ASSIGNMENT_LAST_REQUEST_TIME = time.monotonic()
+
+
 def _get_backup_policy_assignment(
     blockstorage_client,
     asset_id,
@@ -167,8 +214,12 @@ def _get_backup_policy_assignment(
     """
     Get one asset's backup-policy assignment and cache it.
 
-    This endpoint is relatively expensive and is subject to OCI
-    throttling, so never call it repeatedly for the same asset.
+    The assignment endpoint is rate-limited by OCI. We therefore:
+
+        1. Cache successful empty/non-empty responses.
+        2. Throttle requests between unique asset IDs.
+        3. Retry HTTP 429 with exponential backoff.
+        4. Avoid caching a failed 429 response as a valid result.
     """
 
     if not asset_id:
@@ -179,34 +230,77 @@ def _get_backup_policy_assignment(
 
     result = _empty_backup_policy(asset_id)
 
-    try:
-        response = blockstorage_client.get_volume_backup_policy_asset_assignment(
-            asset_id=asset_id
-        )
-        assignments = _get(response, "data", []) or []
+    max_attempts = 5
+    retry_delays = [4, 8, 16, 32]
 
-        if not isinstance(assignments, (list, tuple)):
-            assignments = [assignments]
+    for attempt in range(1, max_attempts + 1):
 
-        if assignments:
-            assignment = assignments[0]
-            result["backup_policy_assignment_id"] = _get(
-                assignment, "id", ""
-            )
-            result["backup_policy_asset_id"] = _get(
-                assignment, "asset_id", asset_id
-            )
-            result["backup_policy_id"] = _get(
-                assignment, "policy_id", ""
+        try:
+
+            _throttle_assignment_request()
+
+            response = blockstorage_client.get_volume_backup_policy_asset_assignment(
+                asset_id=asset_id
             )
 
-    except Exception as error:
-        print(
-            f"    WARNING getting backup policy assignment "
-            f"for asset {asset_id}: {error}"
-        )
+            assignments = _get(response, "data", []) or []
 
-    assignment_cache[asset_id] = result.copy()
+            if not isinstance(assignments, (list, tuple)):
+                assignments = [assignments]
+
+            if assignments:
+                assignment = assignments[0]
+
+                result["backup_policy_assignment_id"] = _get(
+                    assignment, "id", ""
+                )
+
+                result["backup_policy_asset_id"] = _get(
+                    assignment, "asset_id", asset_id
+                )
+
+                result["backup_policy_id"] = _get(
+                    assignment, "policy_id", ""
+                )
+
+            # A successful 200 response, even when no assignment exists,
+            # is safe to cache.
+            assignment_cache[asset_id] = result.copy()
+            return result
+
+        except Exception as error:
+
+            if _is_429_error(error) and attempt < max_attempts:
+
+                delay = retry_delays[attempt - 1]
+
+                print(
+                    f"    WARNING backup policy assignment API throttled "
+                    f"for asset {asset_id}; "
+                    f"retrying in {delay}s "
+                    f"(attempt {attempt}/{max_attempts})"
+                )
+
+                time.sleep(delay)
+                continue
+
+            if _is_429_error(error):
+                print(
+                    f"    WARNING backup policy assignment API remained "
+                    f"throttled for asset {asset_id}; "
+                    f"skipping this lookup for this run"
+                )
+            else:
+                print(
+                    f"    WARNING getting backup policy assignment "
+                    f"for asset {asset_id}: {error}"
+                )
+
+            # Do not cache a failed request. This allows another stage or
+            # another run to retry later instead of treating the failure as
+            # a legitimate empty assignment.
+            return result
+
     return result
 
 
