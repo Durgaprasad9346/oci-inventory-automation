@@ -71,3 +71,16 @@ class Resource:
     defined_tags: Dict[str, Any] = field(
         default_factory=dict
     )
+
+    # ---------------------------------------------------------
+    # OCI Freeform Tags
+    #
+    # Keeping this field in the common Resource model allows
+    # all collectors to pass freeform tags consistently without
+    # causing Resource constructor errors.
+    #
+    # ---------------------------------------------------------
+
+    freeform_tags: Dict[str, Any] = field(
+        default_factory=dict
+    )
